@@ -127,11 +127,49 @@ def eval(args):
     np.save(os.path.join(args.experiment_dir, 'perturbations_logit_diff.npy'), logit_diff_pertub[:, :perturb_index])
     np.save(os.path.join(args.experiment_dir, 'perturbations_prob_diff.npy'), prob_diff_pertub[:, :perturb_index])
 
-    print(np.mean(num_correct_model), np.std(num_correct_model))
-    print(np.mean(dissimilarity_model), np.std(dissimilarity_model))
-    print(perturbation_steps)
-    print(np.mean(num_correct_pertub, axis=1), np.std(num_correct_pertub, axis=1))
-    print(np.mean(dissimilarity_pertub, axis=1), np.std(dissimilarity_pertub, axis=1))
+    # print(np.mean(num_correct_model), np.std(num_correct_model))
+    # print(np.mean(dissimilarity_model), np.std(dissimilarity_model))
+    # print(perturbation_steps)
+    # print(np.mean(num_correct_pertub, axis=1), np.std(num_correct_pertub, axis=1))
+    # print(np.mean(dissimilarity_pertub, axis=1), np.std(dissimilarity_pertub, axis=1))
+    
+    # Compute metrics
+    mean_correct_model = np.mean(num_correct_model)
+    std_correct_model = np.std(num_correct_model)
+
+    mean_dissim_model = np.mean(dissimilarity_model)
+    std_dissim_model = np.std(dissimilarity_model)
+
+    mean_correct_pertub = np.mean(num_correct_pertub, axis=1)
+    std_correct_pertub = np.std(num_correct_pertub, axis=1)
+
+    mean_dissim_pertub = np.mean(dissimilarity_pertub, axis=1)
+    std_dissim_pertub = np.std(dissimilarity_pertub, axis=1)
+
+    # AUC
+    auc = np.trapz(mean_correct_pertub, perturbation_steps)
+
+    # Prepare output string
+    output = []
+    output.append(f"Model Correct: mean={mean_correct_model:.4f}, std={std_correct_model:.4f}")
+    output.append(f"Model Dissimilarity: mean={mean_dissim_model:.4f}, std={std_dissim_model:.4f}")
+    output.append(f"Perturbation steps: {perturbation_steps}")
+    output.append(f"Pertub Correct (per step): mean={mean_correct_pertub}, std={std_correct_pertub}")
+    output.append(f"Pertub Dissimilarity (per step): mean={mean_dissim_pertub}, std={std_dissim_pertub}")
+    output.append(f"AUC (num_correct_pertub vs perturbation_steps): {auc:.4f}")
+
+    output_text = "\n".join(output)
+
+    # Print to console
+    print(output_text)
+
+    # Save to file
+    save_path = os.path.join(args.experiment_dir, "results.txt")
+    with open(save_path, "w") as f:
+        f.write(output_text)
+
+    print(f"\nSaved results to: {save_path}")
+
 
 
 if __name__ == "__main__":

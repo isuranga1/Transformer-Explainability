@@ -121,7 +121,10 @@ def scores_per_word_from_scores_per_token(input, tokenizer, input_ids, scores_pe
         if start_idx >= len(score_per_char):
             break
         end_idx = end_idx + len(inp)
-        score_per_word.append(np.max(score_per_char[start_idx:end_idx]))
+        score_per_word.append(
+    torch.tensor(score_per_char[start_idx:end_idx]).max().item()
+)
+
 
         # TODO: DELETE
         words_from_chars.append(''.join(input_ids_chars[start_idx:end_idx]))
@@ -254,7 +257,7 @@ def main():
     cache = os.path.join(args.output_dir, 'preprocessed.pkl')
     if os.path.exists(cache):
         logger.info(f'Loading interned documents from {cache}')
-        (interned_documents) = torch.load(cache)
+        (interned_documents) = torch.load(cache,weights_only=False)
     else:
         logger.info(f'Interning documents')
         interned_documents = {}
@@ -312,8 +315,8 @@ def main():
     epoch_data = {}
     if os.path.exists(epoch_save_file):
         logging.info(f'Restoring model from {model_save_file}')
-        evidence_classifier.load_state_dict(torch.load(model_save_file))
-        epoch_data = torch.load(epoch_save_file)
+        evidence_classifier.load_state_dict(torch.load(model_save_file),strict=False)
+        epoch_data = torch.load(epoch_save_file,weights_only=False)
         start_epoch = epoch_data['epoch'] + 1
         # handle finishing because patience was exceeded or we didn't get the best final epoch
         if bool(epoch_data.get('done', 0)):

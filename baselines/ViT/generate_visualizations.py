@@ -178,13 +178,13 @@ if __name__ == "__main__":
     device = torch.device("cuda" if cuda else "cpu")
 
     # Model
-    model = vit_base_patch16_224(pretrained=True).cuda()
-    baselines = Baselines(model)
+    model = vit_base_patch16_224(pretrained=True).cuda() # load normal vit model 
+    baselines = Baselines(model) # instantiate gradcam attention and rollout calculation methods basically relate to attention
 
     # LRP
-    model_LRP = vit_LRP(pretrained=True).cuda()
+    model_LRP = vit_LRP(pretrained=True).cuda() # load vit model with lrp relevance propgation methods defined 
     model_LRP.eval()
-    lrp = LRP(model_LRP)
+    lrp = LRP(model_LRP) #instantate lrp relevnacy propagation 
 
     # orig LRP
     model_orig_LRP = vit_orig_LRP(pretrained=True).cuda()
@@ -202,7 +202,7 @@ if __name__ == "__main__":
         imagenet_ds,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=4
+        num_workers=8
     )
 
     compute_saliency_and_save(args)

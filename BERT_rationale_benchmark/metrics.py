@@ -15,7 +15,7 @@ import torch
 from scipy.stats import entropy
 from sklearn.metrics import accuracy_score, auc, average_precision_score, classification_report, precision_recall_curve, roc_auc_score
 
-from BERT_rationale_benchmark.utils import (
+from utils import (
     Annotation,
     Evidence,
     annotations_from_jsonl,
@@ -669,6 +669,21 @@ def main():
     if args.score_file:
         with open(args.score_file, 'w') as of:
             json.dump(scores, of, indent=4, sort_keys=True)
+            
+    # # args.results is a path to a file
+    # results_dir = os.path.dirname(args.results)
+
+    # # create f1-scores folder inside this directory
+    # save_dir = os.path.join(results_dir, "f1-scores")
+    # os.makedirs(save_dir, exist_ok=True)
+
+    # # Save scores.json inside f1-scores folder
+    # save_path = os.path.join(save_dir, "scores.json")
+
+    # with open(save_path, "w") as f:
+    #     json.dump(scores, f, indent=4, sort_keys=True)
+
+    # print(f"Saved F1 scores to: {save_path}")
 
 if __name__ == '__main__':
     main()

@@ -1,0 +1,4 @@
+Mean IoU over 2 classes: 0.6200
+Pixel-wise Accuracy: 79.74%
+Mean AP over 2 classes: 0.8602
+Mean F1 over 2 classes: 0.4016

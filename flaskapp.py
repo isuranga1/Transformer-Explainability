@@ -29,7 +29,7 @@ logger.info("Starting Flask + ViT-LRP server...")
 # Your ViT + LRP imports
 # --------------------------
 from baselines.ViT.ViT_LRP import vit_base_patch16_224 as vit_LRP
-from baselines.ViT.ViT_explanation_generator import LRP
+from baselines.ViT.ViT_explanation_generator import Baselines,LRP
 from baselines.ViT.ViT_new import vit_base_patch16_224 as vit_orig
 
 
@@ -49,6 +49,16 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     normalize,
 ])
+
+VALID_ATTR_METHODS = [
+    "rollout",
+    "transformer_attribution",
+    "full",
+    "last_layer",
+    "last_layer_attn",
+    "attn_gradcam",
+]
+
 
 # Load class index → name mapping
 with open("cls2idx.json", "r") as f:
@@ -83,6 +93,7 @@ try:
     model.eval()
     inference_model = vit_orig(pretrained=True).to(device)
     inference_model.eval()
+    baselines = Baselines(inference_model)
     logger.info("ViT_LRP models loaded successfully.")
     attribution_generator = LRP(model)
     logger.info("Model and LRP initialized successfully.")
@@ -93,30 +104,41 @@ except Exception as e:
     raise e  # fail fast so you notice
 
 
-def compute_attribution_map(original_image, class_index=None):
+def compute_attribution_map(original_image, class_index=None, method="transformer_attribution"):
     """
     original_image: tensor [3, 224, 224] (normalized)
-    returns: torch.Tensor [224, 224] on CPU, normalized to [0,1]
+    class_index: int or None
+    method: one of VALID_ATTR_METHODS
+    returns: torch.Tensor [224, 224] on CPU, in [0,1]
     """
+
     # [1, 3, 224, 224] on device, with gradients for LRP
     input_tensor = original_image.unsqueeze(0).to(device)
     input_tensor.requires_grad_(True)
 
     # Run LRP
-    transformer_attribution = attribution_generator.generate_LRP(
-        input_tensor,
-        method="transformer_attribution",
-        index=class_index
-    )  # tensor on device
+    if method == "attn_gradcam":
+        transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
+    else:
+        transformer_attribution = attribution_generator.generate_LRP(
+            input_tensor,
+            method=method,
+            index=class_index
+        )  # tensor on device
+        
+    if method == "full":
+        transformer_attribution = transformer_attribution.reshape(1, 1, 224, 224)  
+    else:
+        transformer_attribution = transformer_attribution.reshape(1, 1, 14, 14)  
 
     # Reshape and upscale to 224x224
-    transformer_attribution = transformer_attribution.reshape(1, 1, 14, 14)
-    transformer_attribution = F.interpolate(
-        transformer_attribution,
-        scale_factor=16,
-        mode="bilinear",
-        align_corners=False,
-    )
+    if method != "full":
+        transformer_attribution = F.interpolate(
+            transformer_attribution,
+            scale_factor=16,
+            mode="bilinear",
+            align_corners=False,
+        )
     transformer_attribution = transformer_attribution.reshape(224, 224)
 
     # Normalize to [0,1]
@@ -129,13 +151,13 @@ def compute_attribution_map(original_image, class_index=None):
 # --------------------------
 # Visualization function
 # --------------------------
-def generate_visualization(original_image, class_index=None):
+def generate_visualization(original_image, class_index=None, method="transformer_attribution"):
     """
     original_image: tensor [3, 224, 224] (normalized)
     returns: np.array HxWx3 (BGR, uint8)
     """
     # 1) get normalized attribution [224,224] on CPU
-    attr = compute_attribution_map(original_image, class_index=class_index)  # torch
+    attr = compute_attribution_map(original_image, class_index=class_index, method=method)  # torch
     transformer_attribution = attr.numpy()  # [224,224], float32 in [0,1]
 
     # 2) prepare original image in [0,1] for overlay
@@ -149,10 +171,10 @@ def generate_visualization(original_image, class_index=None):
     # 3) overlay heatmap
     vis = show_cam_on_image(image_transformer_attribution, transformer_attribution)
     vis = np.uint8(255 * vis)  # [0,255]
-    vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)  # to BGR for OpenCV
+    # vis = cv2.cvtColor(np.array(vis))  # to BGR for OpenCV
     return vis
 
-def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="positive"):
+def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="positive", method="transformer_attribution"):
     """
     img_raw: [3,224,224] tensor in [0,1]
     img_norm: [3,224,224] normalized tensor
@@ -171,7 +193,7 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
         }
     """
     base_size = 224 * 224
-    perturbation_steps = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    perturbation_steps = [0.01, 0.05, 0.08, 0.1, 0.15, 0.3, 0.35, 0.4, 0.45]
 
     # --- Original prediction ---
     with torch.no_grad():
@@ -203,7 +225,7 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
     }
 
     # --- Attribution used for perturbation (for target class) ---
-    attr = compute_attribution_map(img_norm, class_index=target_index_int)  # [224,224]
+    attr = compute_attribution_map(img_norm, class_index=target_index_int, method=method)  # [224,224]
     vis = attr.view(-1)  # [224*224]
     
     # Positive: perturb highest-attribution pixels
@@ -297,6 +319,12 @@ def heatmap():
             class_index = int(target_index)
         except ValueError:
             return jsonify({"error": "target_index must be an integer"}), 400
+        
+    # attribution method
+    method = request.form.get("method", "transformer_attribution")
+    if method not in VALID_ATTR_METHODS:
+        return jsonify({"error": f"Invalid method '{method}'. Must be one of: {', '.join(VALID_ATTR_METHODS)}"}), 400
+
     try:
         # Read and preprocess image
         logger.debug("Opening image with PIL...")
@@ -312,7 +340,7 @@ def heatmap():
 
         # Optionally, you could pick a specific class_index
         logger.debug("Generating visualization...")
-        vis_bgr = generate_visualization(img_tensor, class_index=class_index)
+        vis_bgr = generate_visualization(img_tensor, class_index=class_index,method=method)
 
         logger.debug(
             f"Visualization generated: vis_bgr.shape={vis_bgr.shape}, "
@@ -359,6 +387,11 @@ def perturbation():
     perturbation_type = request.form.get("perturbation_type", "positive").lower()
     if perturbation_type not in ("positive", "negative"):
         return jsonify({"error": "perturbation_type must be 'positive' or 'negative'"}), 400
+    
+    # attribution method
+    method = request.form.get("method", "transformer_attribution")
+    if method not in VALID_ATTR_METHODS:
+        return jsonify({"error": f"Invalid method '{method}'. Must be one of: {', '.join(VALID_ATTR_METHODS)}"}), 400
 
     try:
         img = Image.open(file.stream).convert("RGB")
@@ -375,10 +408,12 @@ def perturbation():
             img_norm,
             target_index=target_index,
             perturbation_type=perturbation_type,
+            method=method,
         )
 
         return jsonify({
             "perturbation_type": perturbation_type,
+            "method": method,
             "target_class_idx": target_idx,
             "target_class_name": target_name,
             "original_prediction": original_prediction,

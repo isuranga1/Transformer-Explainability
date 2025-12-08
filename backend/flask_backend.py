@@ -92,8 +92,17 @@ checkpoint_dir = os.path.join(_script_dir, "model_checkpoints")
 os.makedirs(checkpoint_dir, exist_ok=True)
 logger.info(f"Using checkpoint directory: {checkpoint_dir}")
 
+import json 
+
+all_model_details_json_list= list(json.load(open("models_details.json")))
+all_model_details_dict = dict()
+for i, item in enumerate(all_model_details_json_list):
+    all_model_details_dict[item["model_id"]] = item
+
+
 # Track current device for models
 _current_device = None
+SELECTED_MODEL_ID = None
 
 def get_device(requested_device=None):
     """
@@ -150,6 +159,7 @@ except Exception as e:
     raise e  # fail fast so you notice
 
 
+
 def compute_attribution_map(original_image, class_index=None, method="transformer_attribution", device="cpu"):
     """
     original_image: tensor [3, 224, 224] (normalized)
@@ -167,15 +177,37 @@ def compute_attribution_map(original_image, class_index=None, method="transforme
 
     # Run LRP
     try:
-        if method == "attn_gradcam":
-            transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
-        else:
-            transformer_attribution = attribution_generator.generate_LRP(
-                input_tensor,
-                method=method,
-                index=class_index
-            )  # tensor on device
+        if SELECTED_MODEL_ID == "vit_base_patch16_224.augreg2_in21k_ft_in1k":
+            from pprint import pprint
+            pprint(all_model_details_dict[SELECTED_MODEL_ID])
+            
+            if method == "attn_gradcam":
+                transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
+            else:
+                transformer_attribution = attribution_generator.generate_LRP(
+                    input_tensor,
+                    method=method,
+                    index=class_index
+                )  # tensor on device
         
+        elif SELECTED_MODEL_ID == "vit_base_patch14_reg4_dinov2":
+
+           
+
+            # TODO: 
+            if method == "attn_gradcam":
+                transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
+            else:
+                transformer_attribution = attribution_generator.generate_LRP(
+                    input_tensor,
+                    method=method,
+                    index=class_index
+                )  # tensor on device
+
+
+        # TODO: Add all other models LRP here
+        else:
+            raise ValueError(f"Invalid model ID: {SELECTED_MODEL_ID}")
         logger.debug(f"transformer_attribution shape after generate_LRP: {transformer_attribution.shape}, dims: {transformer_attribution.dim()}")
         
         # Handle different return shapes from generate_LRP
@@ -607,8 +639,6 @@ def infer():
     except Exception as e:
         logger.error("Error in /api/infer:", e)
         return jsonify({"error": str(e)}), 500
-
-SELECTED_MODEL_ID = None
 
 @app.route("/api/selected_model", methods=["POST"])
 def set_selected_model():

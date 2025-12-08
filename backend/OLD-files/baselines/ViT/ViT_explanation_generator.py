@@ -32,7 +32,7 @@ class LRP:
         one_hot[0, index] = 1
         one_hot_vector = one_hot
         one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * output)
+        one_hot = torch.sum(one_hot.to(input.device) * output)
 
         self.model.zero_grad()
         one_hot.backward(retain_graph=True)
@@ -48,14 +48,14 @@ class Baselines:
         self.model.eval()
 
     def generate_cam_attn(self, input, index=None):
-        output = self.model(input.cuda(), register_hook=True)
+        output = self.model(input, register_hook=True)
         if index == None:
             index = np.argmax(output.cpu().data.numpy())
 
         one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
         one_hot[0][index] = 1
         one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * output)
+        one_hot = torch.sum(one_hot.to(input.device) * output)
 
         self.model.zero_grad()
         one_hot.backward(retain_graph=True)

@@ -84,14 +84,36 @@ def resume_checkpoint(model, checkpoint_path, optimizer=None, loss_scaler=None, 
         raise FileNotFoundError()
 
 
-def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=None, strict=True):
+def load_pretrained(model, cfg=None, num_classes=1000, in_chans=3, filter_fn=None, strict=True, checkpoint_dir=None):
     if cfg is None:
         cfg = getattr(model, 'default_cfg')
     if cfg is None or 'url' not in cfg or not cfg['url']:
         _logger.warning("Pretrained model URL is invalid, using random initialization.")
         return
 
-    state_dict = model_zoo.load_url(cfg['url'], progress=False, map_location='cpu')
+    # Use custom checkpoint directory if provided
+    if checkpoint_dir is not None:
+        import urllib.parse
+        import urllib.request
+        # Extract filename from URL
+        url_path = urllib.parse.urlparse(cfg['url']).path
+        filename = os.path.basename(url_path)
+        checkpoint_path = os.path.join(checkpoint_dir, filename)
+        
+        # Download to custom directory if not exists
+        if not os.path.isfile(checkpoint_path):
+            _logger.info(f"Downloading: {cfg['url']} to {checkpoint_path}")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            # Download manually to ensure it goes to the right place
+            urllib.request.urlretrieve(cfg['url'], checkpoint_path)
+            _logger.info(f"Downloaded checkpoint to: {checkpoint_path}")
+        
+        # Load from custom directory
+        _logger.info(f"Loading checkpoint from: {checkpoint_path}")
+        state_dict = torch.load(checkpoint_path, map_location='cpu')
+    else:
+        # Use default behavior (downloads to ~/.cache/torch/hub/checkpoints/)
+        state_dict = model_zoo.load_url(cfg['url'], progress=False, map_location='cpu')
 
     if filter_fn is not None:
         state_dict = filter_fn(state_dict)

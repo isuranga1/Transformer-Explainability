@@ -9,10 +9,8 @@ __all__ = ['forward_hook', 'Clone', 'Add', 'Cat', 'ReLU', 'GELU', 'Dropout', 'Ba
 
 def safe_divide(a, b):
     den = b.clamp(min=1e-9) + b.clamp(max=1e-9)
-    # Use .float() instead of .type() for MPS compatibility
-    # Convert boolean tensors to float for multiplication
-    den = den + den.eq(0).float() * 1e-9
-    return a / den * b.ne(0).float()
+    den = den + den.eq(0).type(den.type()) * 1e-9
+    return a / den * b.ne(0).type(b.type())
 
 
 def forward_hook(self, input, output):

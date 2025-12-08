@@ -316,7 +316,9 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        x = self.pool(x, dim=1, indices=torch.tensor(0, device=x.device))
+        # Ensure indices is a proper 1D tensor (not scalar) for MPS compatibility
+        indices = torch.tensor([0], device=x.device, dtype=torch.long)
+        x = self.pool(x, dim=1, indices=indices)
         x = x.squeeze(1)
         x = self.head(x)
         return x

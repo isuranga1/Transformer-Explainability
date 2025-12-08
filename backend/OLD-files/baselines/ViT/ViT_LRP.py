@@ -316,7 +316,9 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        x = self.pool(x, dim=1, indices=torch.tensor(0, device=x.device))
+        # Ensure indices is a proper tensor (not scalar) for MPS compatibility
+        indices = torch.tensor([0], device=x.device, dtype=torch.long)
+        x = self.pool(x, dim=1, indices=indices)
         x = x.squeeze(1)
         x = self.head(x)
         return x
@@ -408,12 +410,15 @@ def _conv_filter(state_dict, patch_size=16):
     return out_dict
 
 def vit_base_patch16_224(pretrained=False, **kwargs):
+    # Extract checkpoint_dir before passing kwargs to VisionTransformer
+    checkpoint_dir = kwargs.pop('checkpoint_dir', None)
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, **kwargs)
     model.default_cfg = default_cfgs['vit_base_patch16_224']
     if pretrained:
         load_pretrained(
-            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), filter_fn=_conv_filter)
+            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), 
+            filter_fn=_conv_filter, checkpoint_dir=checkpoint_dir)
     return model
 
 def vit_large_patch16_224(pretrained=False, **kwargs):

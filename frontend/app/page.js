@@ -5,12 +5,13 @@ import { Stage, Layer, Image as KonvaImage, Line } from "react-konva";
 import { Upload, Zap, RefreshCw, Sparkles, Activity } from "lucide-react";
 
 export default function Page() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5000";
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5001";
 
   const [file, setFile] = useState(null);
   const [originalUrl, setOriginalUrl] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [attrMethod, setAttrMethod] = useState("transformer_attribution");
+  const [device, setDevice] = useState("cpu");
 
   const [heatmapUrl, setHeatmapUrl] = useState(null);
   const [targetIndex, setTargetIndex] = useState("");
@@ -86,6 +87,7 @@ export default function Page() {
         formData.append("target_index", targetIndex.trim());
       }
       formData.append("method", attrMethod);
+      formData.append("device", device);
 
       const res = await fetch(`${API_BASE}/api/heatmap`, {
         method: "POST",
@@ -130,6 +132,7 @@ export default function Page() {
       }
       formData.append("perturbation_type", perturbationType);
       formData.append("method", attrMethod);
+      formData.append("device", device);
 
       const res = await fetch(`${API_BASE}/api/perturbation`, {
         method: "POST",
@@ -246,6 +249,7 @@ export default function Page() {
 
       const formData = new FormData();
       formData.append("image", blob, "perturbed.png");
+      formData.append("device", device);
 
       const res = await fetch(`${API_BASE}/api/infer`, {
         method: "POST",
@@ -323,25 +327,43 @@ export default function Page() {
             </div>
           </div>
 
-          {/* Attribution Method */}
-          <div className="space-y-2">
-            <label className="block text-sm font-semibold text-slate-700">
-              Attribution Method
-            </label>
-            <select
-              value={attrMethod}
-              onChange={(e) => setAttrMethod(e.target.value)}
-              className="w-full px-4 py-2.5 border border-slate-600 bg-slate-900 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200 bg-slate-900"
-            >
-              <option value="rollout">Rollout</option>
-              <option value="transformer_attribution">
-                Transformer Attribution
-              </option>
-              <option value="full">Full LRP</option>
-              <option value="last_layer">LRP Last Layer</option>
-              <option value="last_layer_attn">Attention Last Layer</option>
-              <option value="attn_gradcam">Attention GradCAM</option>
-            </select>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Attribution Method */}
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-slate-300">
+                Attribution Method
+              </label>
+              <select
+                value={attrMethod}
+                onChange={(e) => setAttrMethod(e.target.value)}
+                className="w-full px-4 py-2.5 border border-slate-600 bg-slate-900 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200"
+              >
+                <option value="rollout">Rollout</option>
+                <option value="transformer_attribution">
+                  Transformer Attribution
+                </option>
+                <option value="full">Full LRP</option>
+                <option value="last_layer">LRP Last Layer</option>
+                <option value="last_layer_attn">Attention Last Layer</option>
+                <option value="attn_gradcam">Attention GradCAM</option>
+              </select>
+            </div>
+
+            {/* Device Selection */}
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-slate-300">
+                Device
+              </label>
+              <select
+                value={device}
+                onChange={(e) => setDevice(e.target.value)}
+                className="w-full px-4 py-2.5 border border-slate-600 bg-slate-900 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-200"
+              >
+                <option value="cpu">CPU</option>
+                <option value="cuda">CUDA (GPU)</option>
+                <option value="mps">MPS (Apple Silicon)</option>
+              </select>
+            </div>
           </div>
 
           {/* Action Buttons */}

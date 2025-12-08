@@ -14,3 +14,5 @@ transformers == 3.5.1
 utils == 1.0.1
 Pygments>=2.7.4
 flask
+flask-cors
+numpy

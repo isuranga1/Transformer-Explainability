@@ -1,0 +1,191 @@
+[
+  {
+    "model_id": "vit_base_patch8_224",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 8,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_base_patch16_224.augreg2_in21k_ft_in1k",
+    "available": true,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_base_patch16_224",
+    "available": false,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_large_patch16_rope_224",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_huge_patch16_224",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_large_patch14_224",
+    "available": false,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 14,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_huge_patch14_224",
+    "available": false,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 14,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_small_patch16_224.fb_in22k_ft_in1k",
+    "available": true,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_base_patch16_224.fb_in22k_ft_in1k",
+    "available": true,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_medium_patch16_224.fb_in22k_ft_in1k",
+    "available": true,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_large_patch16_224.fb_in22k_ft_in1k",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 224,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_small_patch16_384.fb_in22k_ft_in1k",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 384,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_base_patch16_384.fb_in22k_ft_in1k",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 384,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "deit3_large_patch16_384.fb_in22k_ft_in1k",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 384,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_small_patch14_dinov2",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 518,
+    "patch_size": 14,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_base_patch14_dinov2",
+    "available": true,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 518,
+    "patch_size": 14,
+    "finetuned_head_path": "vit_base_patch14_dinov2_in1k_best.pth"
+  },
+  {
+    "model_id": "vit_small_patch14_reg4_dinov2",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": true,
+    "input_image_resolution": 518,
+    "patch_size": 14,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_base_patch14_reg4_dinov2",
+    "available": true,
+    "backbone_only": true,
+    "has_registers": true,
+    "input_image_resolution": 518,
+    "patch_size": 14,
+    "finetuned_head_path": "vit_base_patch14_reg4_dinov2_head_finetuned_best.pth"
+  },
+  {
+    "model_id": "vit_base_patch16_dinov3_in1k",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 518,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  },
+  {
+    "model_id": "vit_base_patch16_dinov3",
+    "available": true,
+    "backbone_only": true,
+    "has_registers": false,
+    "input_image_resolution": 518,
+    "patch_size": 16,
+    "finetuned_head_path": "vit_base_patch16_dinov3_in1k_best_20_epochs.pth"
+  },
+  {
+    "model_id": "vit_base_patch16_dinov3_qkvb",
+    "available": false,
+    "backbone_only": false,
+    "has_registers": false,
+    "input_image_resolution": 518,
+    "patch_size": 16,
+    "finetuned_head_path": "-"
+  }
+]

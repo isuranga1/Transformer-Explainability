@@ -9,8 +9,22 @@ export default function Page() {
 
   /* New State for UI Logic */
   const [perturbTestEnabled, setPerturbTestEnabled] = useState(false);
-  const [modelId, setModelId] = useState("deit_tiny_patch16_224");
+  const [modelId, setModelId] = useState("");
+  const [availableModels, setAvailableModels] = useState([]);
   const perturbSectionRef = useRef(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/models`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+          // Set default to first available model
+          setModelId(data.models[0].model_id);
+        }
+      })
+      .catch((err) => console.error("Failed to fetch models:", err));
+  }, []);
 
   /* Scroll to Perturbation Section when checkbox is checked, or top when unchecked */
   useEffect(() => {
@@ -464,6 +478,7 @@ export default function Page() {
         className="fixed top-0 left-0 right-0 z-50 flex items-center gap-6 px-8 py-3 border-b shadow-md"
         style={{ backgroundColor: '#161b22', borderColor: '#30363d' }}
       >
+        <h1 className="text-lg font-bold">Vision Encoder Explainability Evaluation Tool</h1>
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -502,9 +517,11 @@ export default function Page() {
             style={{ backgroundColor: '#0d1117', borderColor: '#30363d' }}
             className="px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500"
           >
-            <option value="deit_tiny_patch16_224">deit_tiny_patch16_224</option>
-            <option value="vit_base_patch16_224">vit_base_patch16_224</option>
-            <option value="deit3_base_patch16_224">deit3_base_patch16_224</option>
+            {availableModels.map((m) => (
+              <option key={m.model_id} value={m.model_id}>
+                {m.model_id}
+              </option>
+            ))}
           </select>
         </div>
 

@@ -608,6 +608,29 @@ def infer():
         logger.error("Error in /api/infer:", e)
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/models", methods=["GET"])
+def get_models():
+    """
+    Returns a list of available models from models_details.json
+    """
+    logger.info("➡️ /api/models called")
+    try:
+        details_path = os.path.join(_script_dir, "models_details.json")
+        with open(details_path, "r") as f:
+            all_models = json.load(f)
+        
+        # Filter for filtering available models if needed, 
+        # or return all and let frontend decide?
+        # User request: "model_id should appear in the dropdown ... only if 'available' is true"
+        # I can filter here or in frontend. Filtering here reduces payload.
+        
+        available_models = [m for m in all_models if m.get("available") is True]
+        
+        return jsonify({"models": available_models})
+    except Exception as e:
+        logger.error(f"Error reading models_details.json: {e}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Flask backend for ViT explainability")

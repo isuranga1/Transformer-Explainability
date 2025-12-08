@@ -1,13 +1,5 @@
-*.pyc
-all_good_vis/
-__pycache__
-*.tar
-.idea
-run/**/*.npy
-baselines/ViT/experiments/**/*.npy
-baselines/ViT/visualizations/
-bert_models/
-data/movies/
-imagenet/
-BertData/
+*/node_modules/** 
+
+*/__pycache__/** 
+
 

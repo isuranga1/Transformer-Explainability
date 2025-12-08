@@ -277,6 +277,8 @@ class VisionTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         if num_registers > 0:
             self.reg_token = nn.Parameter(torch.zeros(1, num_registers, embed_dim))
+        else:
+            self.reg_token = None
 
         self.blocks = nn.ModuleList([
             Block(

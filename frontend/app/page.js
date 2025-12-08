@@ -678,15 +678,8 @@ export default function Page() {
           </div>
         </div>
 
-        {/* 3. Layerwise Raw Attention Propagation Placeholder */}
-        <div
-          className="w-full h-64 flex items-center justify-center rounded-lg border-2 border-dashed"
-          style={{ backgroundColor: '#0d1117', borderColor: '#30363d' }}
-        >
-          <h2 className="text-3xl font-light text-center text-gray-500">
-            Layerwise Raw Attention Propogation to be implemented later
-          </h2>
-        </div>
+
+
 
         {/* 4. Horizontal Line */}
         <hr className="border-t-2" style={{ borderColor: '#8b949e' }} />

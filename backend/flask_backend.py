@@ -225,6 +225,35 @@ def load_model_by_id(model_id):
 
             logger.info(f"Loading weights from {ckpt_path}")
             state_dict = torch.load(ckpt_path, map_location="cpu")
+
+            # Handle pos_embed mismatch
+            if "pos_embed" in state_dict:
+                chkpt_pos_embed = state_dict["pos_embed"]
+                model_pos_embed = model.pos_embed
+                logger.info(f"Checkpoint pos_embed: {chkpt_pos_embed.shape}, Model pos_embed: {model_pos_embed.shape}")
+                
+                if chkpt_pos_embed.shape != model_pos_embed.shape:
+                    logger.warning(f"Resizing pos_embed from {chkpt_pos_embed.shape} to {model_pos_embed.shape}")
+                    
+                    # Case: Checkpoint has only patches (1369), model has CLS+Reg+Patches (1+4+1369 = 1374)
+                    # We assume patches are at the end in the model structure (CLS, REGs, PATCHES)
+                    # And checkpoint is just PATCHES.
+                    # Or Checkpoint is CLS + PATCHES (1370)? No, it is 1369.
+                    
+                    if chkpt_pos_embed.shape[1] == 1369 and model_pos_embed.shape[1] == 1374:
+                         # Create new tensor using model's init values (to keep CLS/REG init)
+                        new_pos_embed = model_pos_embed.clone().detach()
+                        # Copy patches from checkpoint to the end of new_pos_embed
+                        # Model structure in ViT_LRP: cat(cls, reg, x) -> then add pos_embed.
+                        # So indices: 0=CLS, 1..4=REG, 5..1373=Patches.
+                        new_pos_embed[:, 5:, :] = chkpt_pos_embed
+                        state_dict["pos_embed"] = new_pos_embed
+                        logger.info("Successfully patched pos_embed with CLS/REG tokens preserved from init.")
+                    else:
+                        logger.warning("Unknown pos_embed mismatch pattern. Attempting standard interpolation if compatible, or failing.")
+                        # Could add standard interpolation here if needed 
+                        # but for now let's stick to the specific fix for this known error.
+
             model.load_state_dict(state_dict)
             model.to(target_device)
             model.eval()
@@ -254,6 +283,29 @@ def load_model_by_id(model_id):
         baselines = Baselines(inference_model)
         attribution_generator = LRP(model)
         
+        if model_id in all_model_details_dict:
+            img_size = all_model_details_dict[model_id].get("input_image_resolution", 224)
+        else:
+            img_size = 224
+
+        global transform
+        if img_size == 224:
+            transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ])
+        else:
+            # For other sizes like 518, we can resize directly or use a crop strategy.
+            # Using Resize((size, size)) ensures exact dimensions.
+            transform = transforms.Compose([
+                transforms.Resize((img_size, img_size)),
+                transforms.ToTensor(),
+                normalize,
+            ])
+        logger.info(f"Updated transform for model resolution: {img_size}x{img_size}")
+
         SELECTED_MODEL_ID = model_id
         logger.info(f"Successfully loaded {model_id}")
         

@@ -6,12 +6,6 @@ import sys
 import os
 import argparse
 
-# Add OLD-files to Python path for modules, utils, data, dataset imports
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-_old_files_dir = os.path.join(_script_dir, "OLD-files")
-if _old_files_dir not in sys.path:
-    sys.path.insert(0, _old_files_dir)
-
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -68,9 +62,9 @@ VALID_ATTR_METHODS = [
     "attn_gradcam",
 ]
 
-
+_script_dir = os.path.dirname(os.path.abspath(__file__))
 # Load class index → name mapping
-with open("cls2idx.json", "r") as f:
+with open(os.path.join(_script_dir, "cls2idx.json"), "r") as f:
     CLS2IDX = json.load(f)
 
 def get_class_name(idx: int) -> str:

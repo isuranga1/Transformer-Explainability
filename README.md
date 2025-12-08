@@ -15,6 +15,7 @@ npm run dev
 - add multiple pytorch models support 
 - use timm library
 - choose model from the dropdown list
+- View clicked image full screen to view finer details
 
 UI Fixes 
 - add inverse mask 

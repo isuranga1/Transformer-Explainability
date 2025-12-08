@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Stage, Layer, Image as KonvaImage, Line } from "react-konva";
-import { Upload, Zap, RefreshCw, Sparkles, Activity } from "lucide-react";
+import { Upload, Zap, RefreshCw, Sparkles, Activity, ZoomIn, ZoomOut, Undo, Trash2, Sliders, Eraser } from "lucide-react";
 
 export default function Page() {
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5001";
@@ -39,11 +39,20 @@ export default function Page() {
   const [loadingNegPert, setLoadingNegPert] = useState(false);
 
   const [konvaImage, setKonvaImage] = useState(null);
+  /* Mask Drawing State */
   const [imgSize, setImgSize] = useState({ width: 0, height: 0 });
   const [maskLines, setMaskLines] = useState([]);
+  const [history, setHistory] = useState([]); // For Undo
   const [isDrawingMask, setIsDrawingMask] = useState(false);
 
+  /* Mask Tools State */
+  const [activeTool, setActiveTool] = useState("brush"); // 'brush' or 'eraser'
+  const [brushSize, setBrushSize] = useState(25);
+  const [scale, setScale] = useState(1);
+  const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
+
   const [perturbedUrl, setPerturbedUrl] = useState(null);
+  const [perturbedHeatmapUrl, setPerturbedHeatmapUrl] = useState(null);
   const [inferenceResults, setInferenceResults] = useState([]);
   const [loadingInfer, setLoadingInfer] = useState(false);
 
@@ -81,7 +90,12 @@ export default function Page() {
     setPositiveResults([]);
     setNegativeResults([]);
     setMaskLines([]);
+    setHistory([]);
+    setActiveTool("brush");
+    setScale(1);
+    setStagePos({ x: 0, y: 0 });
     setPerturbedUrl(null);
+    setPerturbedHeatmapUrl(null);
     setInferenceResults([]);
     setErrorMsg("");
   };
@@ -207,14 +221,32 @@ export default function Page() {
   const handlePositivePerturbation = () => runPerturbation("positive");
   const handleNegativePerturbation = () => runPerturbation("negative");
 
+  /* Helper to get pointer position relative to the image (handling zoom/pan) */
+  const getPointerPosInImage = (stage) => {
+    const transform = stage.getAbsoluteTransform().copy();
+    transform.invert();
+    const pos = stage.getPointerPosition();
+    return transform.point(pos);
+  };
+
   const handleMaskMouseDown = (e) => {
     if (!konvaImage) return;
-    const pos = e.target.getStage().getPointerPosition();
+
+    // Check if we are clicking on the image
+    const stage = e.target.getStage();
+    // Get corrected position in image space
+    const pos = getPointerPosInImage(stage);
+
     setIsDrawingMask(true);
+    // Push current state to history before new stroke
+    setHistory([...history, maskLines]);
+
     setMaskLines((lines) => [
       ...lines,
       {
+        tool: activeTool,
         points: [pos.x, pos.y],
+        size: brushSize,
       },
     ]);
   };
@@ -222,7 +254,8 @@ export default function Page() {
   const handleMaskMouseMove = (e) => {
     if (!isDrawingMask) return;
     const stage = e.target.getStage();
-    const point = stage.getPointerPosition();
+    const point = getPointerPosInImage(stage);
+
     setMaskLines((lines) => {
       const lastLine = lines[lines.length - 1];
       const newPoints = lastLine.points.concat([point.x, point.y]);
@@ -235,10 +268,33 @@ export default function Page() {
     setIsDrawingMask(false);
   };
 
-  const handleApplyCanvasPerturbation = () => {
-    if (!konvaImage || maskLines.length === 0) {
-      setErrorMsg("Draw a mask on the image first (paint over the region).");
-      return;
+  const handleUndo = () => {
+    if (history.length === 0) return;
+    const previous = history[history.length - 1];
+    setMaskLines(previous);
+    setHistory(history.slice(0, -1));
+  };
+
+  const handleResetMask = () => {
+    setHistory([...history, maskLines]);
+    setMaskLines([]);
+  };
+
+  const handleZoomIn = () => {
+    setScale(s => Math.min(s * 1.2, 5));
+  };
+
+  const handleZoomOut = () => {
+    setScale(s => Math.max(s / 1.2, 1));
+    if (scale <= 1.2) setStagePos({ x: 0, y: 0 }); // Reset pos if zoomed out
+  };
+
+  const handleApplyCanvasPerturbation = (invert = false) => {
+    if (!konvaImage || (maskLines.length === 0 && !invert)) {
+      if (!invert) {
+        setErrorMsg("Draw a mask on the image first.");
+        return;
+      }
     }
 
     const canvas = document.createElement("canvas");
@@ -246,28 +302,86 @@ export default function Page() {
     canvas.height = imgSize.height;
     const ctx = canvas.getContext("2d");
 
+    // 1. Draw Image
     ctx.drawImage(konvaImage, 0, 0, imgSize.width, imgSize.height);
 
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "black";
-    ctx.lineWidth = 25;
+    if (invert) {
+      // Create an offscreen canvas for the mask
+      const maskCanvas = document.createElement("canvas");
+      maskCanvas.width = imgSize.width;
+      maskCanvas.height = imgSize.height;
+      const maskCtx = maskCanvas.getContext("2d");
 
-    maskLines.forEach((line) => {
-      const pts = line.points;
-      if (pts.length < 4) return;
-      ctx.beginPath();
-      ctx.moveTo(pts[0], pts[1]);
-      for (let i = 2; i < pts.length; i += 2) {
-        ctx.lineTo(pts[i], pts[i + 1]);
-      }
-      ctx.stroke();
-    });
-    ctx.restore();
+      maskCtx.lineCap = "round";
+      maskCtx.lineJoin = "round";
+      maskCtx.strokeStyle = "rgba(0,0,0,1)"; // Opaque color
+
+      // Draw all lines onto the mask canvas
+      maskLines.forEach((line) => {
+        const pts = line.points;
+        if (pts.length < 4) return;
+        maskCtx.beginPath();
+        maskCtx.lineWidth = line.size; // Use saved size
+
+        // If eraser, we need to Clear the mask where drawn. 
+        // Since we are drawing on a transparent canvas with opaque lines, 'erasing' means 'clearing'.
+        maskCtx.globalCompositeOperation = line.tool === 'eraser' ? 'destination-out' : 'source-over';
+
+        maskCtx.moveTo(pts[0], pts[1]);
+        for (let i = 2; i < pts.length; i += 2) {
+          maskCtx.lineTo(pts[i], pts[i + 1]);
+        }
+        maskCtx.stroke();
+      });
+
+      // Now composite the mask onto the image
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.drawImage(maskCanvas, 0, 0);
+
+      // Fill the rest with black
+      ctx.globalCompositeOperation = 'destination-over';
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    } else {
+      // Normal operation: Draw black lines ON TOP of image.
+      // But wait! If we have eraser lines, they should REMOVE previous black lines.
+      // To support eraser in "Apply Mask" mode:
+      // We should draw all lines onto a separate "Mask Layer Canvas", handling erasals.
+      // Then draw that Mask Layer onto the main image.
+
+      const maskCanvas = document.createElement("canvas");
+      maskCanvas.width = imgSize.width;
+      maskCanvas.height = imgSize.height;
+      const maskCtx = maskCanvas.getContext("2d");
+
+      maskCtx.lineCap = "round";
+      maskCtx.lineJoin = "round";
+      maskCtx.strokeStyle = "black";
+
+      maskLines.forEach((line) => {
+        const pts = line.points;
+        if (pts.length < 4) return;
+
+        maskCtx.beginPath();
+        maskCtx.lineWidth = line.size;
+        maskCtx.globalCompositeOperation = line.tool === 'eraser' ? 'destination-out' : 'source-over';
+
+        maskCtx.moveTo(pts[0], pts[1]);
+        for (let i = 2; i < pts.length; i += 2) {
+          maskCtx.lineTo(pts[i], pts[i + 1]);
+        }
+        maskCtx.stroke();
+      });
+
+      // Draw the final mask layer onto the image
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(maskCanvas, 0, 0);
+    }
 
     const dataUrl = canvas.toDataURL("image/png");
     setPerturbedUrl(dataUrl);
+    setPerturbedHeatmapUrl(null);
     setInferenceResults([]);
     setErrorMsg("");
   };
@@ -281,31 +395,52 @@ export default function Page() {
     setLoadingInfer(true);
     setErrorMsg("");
     setInferenceResults([]);
+    setPerturbedHeatmapUrl(null);
 
     try {
       const resBlob = await fetch(perturbedUrl);
       const blob = await resBlob.blob();
 
+      // 1. Run Inference
       const formData = new FormData();
       formData.append("image", blob, "perturbed.png");
       formData.append("device", device);
+      formData.append("model_id", modelId); // Ensure model_id is sent for inference too if backend needs it (infer endpoint usually uses loaded model)
 
-      const res = await fetch(`${API_BASE}/api/infer`, {
+      const resInfer = await fetch(`${API_BASE}/api/infer`, {
         method: "POST",
         body: formData,
       });
 
-      if (!res.ok) {
-        let msg = `Inference failed: ${res.status}`;
-        try {
-          const d = await res.json();
-          if (d.error) msg = d.error;
-        } catch (_) { }
-        throw new Error(msg);
+      if (!resInfer.ok) {
+        throw new Error(`Inference failed: ${resInfer.status}`);
       }
 
-      const data = await res.json();
-      setInferenceResults(data.predictions || []);
+      const dataInfer = await resInfer.json();
+      setInferenceResults(dataInfer.predictions || []);
+
+      // 2. Generate Heatmap for Perturbed Image
+      const formDataHeatmap = new FormData();
+      formDataHeatmap.append("image", blob, "perturbed.png");
+      if (targetIndex.trim() !== "") {
+        formDataHeatmap.append("target_index", targetIndex.trim());
+      }
+      formDataHeatmap.append("method", attrMethod);
+      formDataHeatmap.append("model_id", modelId);
+      formDataHeatmap.append("device", device);
+
+      const resHeatmap = await fetch(`${API_BASE}/api/heatmap`, {
+        method: "POST",
+        body: formDataHeatmap,
+      });
+
+      if (resHeatmap.ok) {
+        const blobHeatmap = await resHeatmap.blob();
+        setPerturbedHeatmapUrl(URL.createObjectURL(blobHeatmap));
+      } else {
+        console.error("Failed to generate heatmap for perturbed image");
+      }
+
     } catch (err) {
       console.error(err);
       setErrorMsg(err.message || "Something went wrong");
@@ -512,7 +647,7 @@ export default function Page() {
         {/* 5. Perturb Test Section */}
         <div ref={perturbSectionRef} className="space-y-6 pt-4">
           <h2 className="text-4xl font-normal text-center mb-10" style={{ color: '#c9d1d9' }}>
-            Content from Perturb test (Dont change this , keep it as it is)
+            Perturbation Test
           </h2>
 
           {/* Copy existing perturbation UI logic here */}
@@ -634,16 +769,92 @@ export default function Page() {
           {/* Mask-Based Perturbation - Keeping as is */}
           <div className="grid lg:grid-cols-2 gap-6">
             <div style={{ backgroundColor: '#161b22', borderColor: '#30363d' }} className="rounded-lg border p-6 space-y-4">
-              <h3 className="text-xl font-bold">Mask-based Perturbation</h3>
-              <div style={{ borderColor: '#30363d', backgroundColor: '#0d1117' }} className="rounded-lg overflow-hidden border-2 border-dashed">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xl font-bold">Mask-based Perturbation</h3>
+
+                {/* Visual Feedback for Modes */}
+                <div className="flex gap-2 text-xs">
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-full bg-red-500"></div> Mask
+                  </div>
+                </div>
+              </div>
+
+              {/* Toolbar */}
+              <div className="flex flex-wrap items-center gap-4 p-2 rounded-lg bg-[#0d1117] border border-gray-700">
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setActiveTool("brush")}
+                    className={`p-1.5 rounded disabled:opacity-30 ${activeTool === 'brush' ? 'bg-blue-600 text-white' : 'hover:bg-gray-700 text-gray-400 hover:text-white'}`}
+                    title="Brush"
+                  >
+                    <div className="w-4 h-4 rounded-full bg-current" />
+                  </button>
+                  <button
+                    onClick={() => setActiveTool("eraser")}
+                    className={`p-1.5 rounded disabled:opacity-30 ${activeTool === 'eraser' ? 'bg-blue-600 text-white' : 'hover:bg-gray-700 text-gray-400 hover:text-white'}`}
+                    title="Eraser"
+                  >
+                    <Eraser className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="h-6 w-px bg-gray-700"></div>
+
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-gray-400" />
+                  <input
+                    type="range"
+                    min="5"
+                    max="100"
+                    value={brushSize}
+                    onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                    className="w-24 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs w-6">{brushSize}px</span>
+                </div>
+
+                <div className="h-6 w-px bg-gray-700"></div>
+
+                <div className="flex items-center gap-1">
+                  <button onClick={handleZoomOut} className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-white" title="Zoom Out">
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs min-w-[3em] text-center">{(scale * 100).toFixed(0)}%</span>
+                  <button onClick={handleZoomIn} className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-white" title="Zoom In">
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="h-6 w-px bg-gray-700"></div>
+
+                <div className="flex items-center gap-1">
+                  <button onClick={handleUndo} disabled={history.length === 0} className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-white disabled:opacity-30" title="Undo">
+                    <Undo className="w-4 h-4" />
+                  </button>
+                  <button onClick={handleResetMask} disabled={maskLines.length === 0} className="p-1.5 hover:bg-gray-700 rounded text-red-400 hover:text-red-300 disabled:opacity-30" title="Reset Mask">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ borderColor: '#30363d', backgroundColor: '#0d1117' }} className="rounded-lg overflow-hidden border-2 border-dashed relative group">
                 {konvaImage && imgSize.width > 0 && imgSize.height > 0 ? (
                   <Stage
                     width={imgSize.width}
                     height={imgSize.height}
+                    scaleX={scale}
+                    scaleY={scale}
+                    x={stagePos.x}
+                    y={stagePos.y}
+                    draggable={scale > 1}
+                    onDragEnd={(e) => {
+                      setStagePos(e.target.position());
+                    }}
                     onMouseDown={handleMaskMouseDown}
                     onMouseMove={handleMaskMouseMove}
                     onMouseUp={handleMaskMouseUp}
-                    style={{ cursor: "crosshair" }}
+                    style={{ cursor: scale > 1 ? "grab" : "crosshair" }}
                   >
                     <Layer>
                       <KonvaImage
@@ -660,11 +871,14 @@ export default function Page() {
                           key={idx}
                           points={line.points}
                           stroke="#ef4444"
-                          strokeWidth={20}
+                          strokeWidth={line.size}
                           tension={0.5}
                           lineCap="round"
                           lineJoin="round"
-                          opacity={0.7}
+                          opacity={line.tool === 'eraser' ? 1 : 0.6}
+                          globalCompositeOperation={
+                            line.tool === 'eraser' ? 'destination-out' : 'source-over'
+                          }
                         />
                       ))}
                     </Layer>
@@ -675,40 +889,62 @@ export default function Page() {
                     <p>Upload an image to start drawing</p>
                   </div>
                 )}
+
+                {scale > 1 && (
+                  <div className="absolute bottom-2 right-2 bg-black/70 px-2 py-1 rounded text-xs text-white pointer-events-none">
+                    Drag to pan
+                  </div>
+                )}
               </div>
+
               <div className="flex gap-3">
                 <button
-                  onClick={handleApplyCanvasPerturbation}
+                  onClick={() => handleApplyCanvasPerturbation(false)}
                   disabled={!originalUrl || maskLines.length === 0}
                   style={{ backgroundColor: '#238636', color: '#ffffff' }}
-                  className="flex-1 py-3 rounded-lg font-semibold disabled:opacity-50"
+                  className="flex-1 py-3 rounded-lg font-semibold disabled:opacity-50 transition-colors"
                 >
                   Apply Mask
                 </button>
                 <button
-                  onClick={handleRunInferencePerturbed}
-                  disabled={!perturbedUrl || loadingInfer}
-                  style={{ backgroundColor: '#238636', color: '#ffffff' }}
-                  className="flex-1 py-3 rounded-lg font-semibold disabled:opacity-50"
+                  onClick={() => handleApplyCanvasPerturbation(true)}
+                  disabled={!originalUrl || maskLines.length === 0}
+                  style={{ backgroundColor: '#1f6feb', color: '#ffffff' }}
+                  className="flex-1 py-3 rounded-lg font-semibold disabled:opacity-50 transition-colors"
                 >
-                  Run Inference
+                  Get Inverse Mask
                 </button>
               </div>
+
+              <button
+                onClick={handleRunInferencePerturbed}
+                disabled={!perturbedUrl || loadingInfer}
+                style={{ backgroundColor: '#8b949e', color: '#ffffff' }}
+                className="w-full py-3 rounded-lg font-semibold disabled:opacity-50 transition-colors hover:bg-gray-600"
+              >
+                Run Inference on Perturbed Image
+              </button>
             </div>
 
             {/* Results Preview */}
-            <div style={{ backgroundColor: '#161b22', borderColor: '#30363d' }} className="rounded-lg border p-6 space-y-4">
+            <div style={{ backgroundColor: '#161b22', borderColor: '#30363d' }} className="rounded-lg border p-6 space-y-4 flex flex-col">
               <h3 className="text-xl font-bold">Preview & Results</h3>
               <div className="grid grid-cols-2 gap-4">
                 {perturbedUrl && (
                   <div>
                     <p className="text-sm font-semibold mb-2">Perturbed</p>
-                    <img src={perturbedUrl} alt="perturbed" className="w-full rounded border border-gray-700" />
+                    <img src={perturbedUrl} alt="perturbed" className="w-full rounded border border-gray-700 object-contain bg-black" />
+                  </div>
+                )}
+                {perturbedHeatmapUrl && (
+                  <div>
+                    <p className="text-sm font-semibold mb-2">Explainability Map</p>
+                    <img src={perturbedHeatmapUrl} alt="perturbed heatmap" className="w-full rounded border border-gray-700 object-contain bg-black" />
                   </div>
                 )}
               </div>
               {inferenceResults.length > 0 && (
-                <div className="space-y-2">
+                <div className="space-y-2 flex-1 overflow-y-auto">
                   {inferenceResults.map((r, idx) => (
                     <div key={idx} className="flex justify-between bg-[#0d1117] p-2 rounded border border-gray-700">
                       <span>{idx + 1}. {r.class_name}</span>

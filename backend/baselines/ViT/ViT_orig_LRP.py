@@ -241,7 +241,7 @@ class PatchEmbed(nn.Module):
                      (self.img_size[0] // self.patch_size[0]), (self.img_size[1] // self.patch_size[1]))
         return self.proj.relprop(cam, **kwargs)
 
-
+# ViT_orig_LRP
 class VisionTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
     """
@@ -316,9 +316,7 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        # Ensure indices is a proper 1D tensor (not scalar) for MPS compatibility
-        indices = torch.tensor([0], device=x.device, dtype=torch.long)
-        x = self.pool(x, dim=1, indices=indices)
+        x = self.pool(x, dim=1, indices=torch.tensor(0, device=x.device))
         x = x.squeeze(1)
         x = self.head(x)
         return x
@@ -408,7 +406,7 @@ def _conv_filter(state_dict, patch_size=16):
         out_dict[k] = v
     return out_dict
 
-
+# ViT_orig_LRP
 def vit_base_patch16_224(pretrained=False, **kwargs):
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, **kwargs)

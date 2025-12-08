@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Stage, Layer, Image as KonvaImage, Line, Circle } from "react-konva";
-import { Upload, Zap, RefreshCw, Sparkles, Activity, ZoomIn, ZoomOut, Undo, Trash2, Sliders, Eraser } from "lucide-react";
+import { Upload, Zap, RefreshCw, Sparkles, Activity, ZoomIn, ZoomOut, Undo, Trash2, Sliders, Eraser, Copy, Check } from "lucide-react";
 
 export default function Page() {
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:5001";
@@ -11,6 +11,7 @@ export default function Page() {
   const [perturbTestEnabled, setPerturbTestEnabled] = useState(false);
   const [modelId, setModelId] = useState("");
   const [availableModels, setAvailableModels] = useState([]);
+  const [copied, setCopied] = useState(false);
   const perturbSectionRef = useRef(null);
 
   useEffect(() => {
@@ -25,6 +26,13 @@ export default function Page() {
       })
       .catch((err) => console.error("Failed to fetch models:", err));
   }, []);
+
+  const handleCopyModelId = () => {
+    if (!modelId) return;
+    navigator.clipboard.writeText(modelId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   /* Scroll to Perturbation Section when checkbox is checked, or top when unchecked */
   useEffect(() => {
@@ -523,6 +531,13 @@ export default function Page() {
               </option>
             ))}
           </select>
+          <button
+            onClick={handleCopyModelId}
+            className="p-1.5 rounded-md hover:bg-gray-800 transition-colors"
+            title="Copy Model ID"
+          >
+            {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4 text-gray-400" />}
+          </button>
         </div>
 
         <div className="flex items-center gap-2">

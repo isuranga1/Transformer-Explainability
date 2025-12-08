@@ -151,17 +151,21 @@ class VisionTransformer(nn.Module):
     """ Vision Transformer
     """
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
-                 num_heads=12, mlp_ratio=4., qkv_bias=False, drop_rate=0., attn_drop_rate=0., norm_layer=nn.LayerNorm):
+                 num_heads=12, mlp_ratio=4., qkv_bias=False, drop_rate=0., attn_drop_rate=0., norm_layer=nn.LayerNorm, num_registers=0):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.patch_embed = PatchEmbed(
                 img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
+        self.num_registers = num_registers
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1 + num_registers, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
+        
+        if num_registers > 0:
+            self.reg_token = nn.Parameter(torch.zeros(1, num_registers, embed_dim))
 
         self.blocks = nn.ModuleList([
             Block(
@@ -175,6 +179,8 @@ class VisionTransformer(nn.Module):
 
         trunc_normal_(self.pos_embed, std=.02)
         trunc_normal_(self.cls_token, std=.02)
+        if num_registers > 0:
+            trunc_normal_(self.reg_token, std=.02)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -188,14 +194,20 @@ class VisionTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
+        return {'pos_embed', 'cls_token', 'reg_token'}
 
     def forward(self, x, register_hook=False):
         B = x.shape[0]
         x = self.patch_embed(x)
 
         cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        x = torch.cat((cls_tokens, x), dim=1)
+        
+        if self.num_registers > 0:
+            reg_tokens = self.reg_token.expand(B, -1, -1)
+            x = torch.cat((cls_tokens, reg_tokens, x), dim=1)
+        else:
+            x = torch.cat((cls_tokens, x), dim=1)
+
         x = x + self.pos_embed
         x = self.pos_drop(x)
 
@@ -217,25 +229,31 @@ def _conv_filter(state_dict, patch_size=16):
         out_dict[k] = v
     return out_dict
 
-
+# ViT_new
 def vit_base_patch16_224(pretrained=False, **kwargs):
-    # Extract checkpoint_dir before passing kwargs to VisionTransformer
-    checkpoint_dir = kwargs.pop('checkpoint_dir', None)
+    kwargs.pop('checkpoint_dir', None)
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = default_cfgs['vit_base_patch16_224']
     if pretrained:
         load_pretrained(
-            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), 
-            filter_fn=_conv_filter, checkpoint_dir=checkpoint_dir)
+            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), filter_fn=_conv_filter)
     return model
 
 def vit_large_patch16_224(pretrained=False, **kwargs):
+    kwargs.pop('checkpoint_dir', None)
     model = VisionTransformer(
         patch_size=16, embed_dim=1024, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     model.default_cfg = default_cfgs['vit_large_patch16_224']
     if pretrained:
         load_pretrained(model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3))
+def vit_base_patch14_reg4_dinov2(pretrained=False, **kwargs):
+    kwargs.setdefault('img_size', 518)
+    checkpoint_dir = kwargs.pop('checkpoint_dir', None)
+    model = VisionTransformer(
+        patch_size=14, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), num_registers=4, **kwargs)
+    model.default_cfg = _cfg()
     return model

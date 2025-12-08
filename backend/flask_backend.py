@@ -32,8 +32,10 @@ logger.info("Starting Flask + ViT-LRP server...")
 # Your ViT + LRP imports
 # --------------------------
 from baselines.ViT.ViT_LRP import vit_base_patch16_224 as vit_LRP
+from baselines.ViT.ViT_LRP import vit_base_patch14_reg4_dinov2 as vit_LRP_reg4
 from baselines.ViT.ViT_explanation_generator import Baselines,LRP
 from baselines.ViT.ViT_new import vit_base_patch16_224 as vit_orig
+from baselines.ViT.ViT_new import vit_base_patch14_reg4_dinov2 as vit_orig_reg4
 
 
 # --------------------------
@@ -41,17 +43,19 @@ from baselines.ViT.ViT_new import vit_base_patch16_224 as vit_orig
 # --------------------------
 use_thresholding = False
 
-normalize = transforms.Normalize(
-    mean=[0.5, 0.5, 0.5],
-    std=[0.5, 0.5, 0.5],
-)
+# Transformations (default, will be updated dynamically)
+transform = None
+current_img_size = 224
 
-transform = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    normalize,
-])
+def get_transform(img_size):
+    return transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+
+# Populate initial transform
+transform = get_transform(224)
 
 VALID_ATTR_METHODS = [
     "rollout",
@@ -72,7 +76,7 @@ def get_class_name(idx: int) -> str:
 # --------------------------
 # Heatmap helper
 # --------------------------
-def show_cam_on_image(img, mask):
+def show_cam_on_image(img, mask, use_rgb=False):
     """
     img: H x W x 3, float in [0,1]
     mask: H x W, float in [0,1]
@@ -80,33 +84,134 @@ def show_cam_on_image(img, mask):
     logger.debug(f"show_cam_on_image: img.shape={img.shape}, mask.shape={mask.shape}")
     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
     heatmap = np.float32(heatmap) / 255
+    if use_rgb:
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB) # Convert heatmap to RGB if img is RGB
     cam = heatmap + np.float32(img)
+    cam = cam / np.max(cam)
     cam = cam / np.max(cam)
     return cam
 
+def get_models_details_json():
+    """Helper to load models_details.json"""
+    try:
+        details_path = os.path.join(_script_dir, "models_details.json")
+        with open(details_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error(f"models_details.json not found at {details_path}")
+        return []
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding models_details.json at {details_path}")
+        return []
+
+def get_model_info(model_id):
+    models = get_models_details_json()
+    for m in models:
+        if m["model_id"] == model_id:
+            return m
+    return None
+
 # --------------------------
-# Load model once at startup
+# Load model logic
 # --------------------------
 # Custom checkpoint directory
 checkpoint_dir = os.path.join(_script_dir, "model_checkpoints")
 os.makedirs(checkpoint_dir, exist_ok=True)
 logger.info(f"Using checkpoint directory: {checkpoint_dir}")
 
-# Track current device for models
+# Global model state
+_current_model_id = None
 _current_device = None
 
-def get_device(requested_device=None):
-    """
-    Get and validate device. Move models if needed.
-    requested_device: str or None - 'cpu', 'cuda', or 'mps'
-    """
-    global model, inference_model, baselines, attribution_generator, _current_device
+model = None
+inference_model = None
+baselines = None
+attribution_generator = None
+
+# Initial default model (can be changed via request)
+DEFAULT_MODEL_ID = "vit_base_patch16_224.augreg2_in21k_ft_in1k"
+
+def load_models(model_id, device):
+    global model, inference_model, baselines, attribution_generator, _current_model_id, _current_device, transform, current_img_size
     
+    # Check if we need to reload
+    if model_id == _current_model_id and device == _current_device:
+        return
+
+    logger.info(f"Loading model '{model_id}' on device '{device}'...")
+
+    # Update transforms based on model details
+    model_info = get_model_info(model_id)
+    if model_info:
+        img_size = model_info.get("input_image_resolution", 224)
+        logger.info(f"Setting image resolution to {img_size} for model {model_id}")
+        current_img_size = img_size
+        transform = get_transform(img_size)
+    else:
+        logger.warning(f"No metadata found for {model_id}, defaulting to 224")
+        current_img_size = 224
+        transform = get_transform(224)
+
+    try:
+        # TODO: Add specific factory calls for other models (deit3, etc.)
+        # For now, we attempt to use the same class if possible, or fallback
+        # if model_id != DEFAULT_MODEL_ID and "vit_base_patch16_224" == model_id:
+        if model_id != DEFAULT_MODEL_ID and "vit_base_patch14_reg4_dinov2" not in model_id and "vit_base_patch16" not in model_id and "deit3_base_patch16" not in model_id:
+             logger.warning(f"Model '{model_id}' is not fully supported yet. Falling back to default architecture structure.")
+
+        if "vit_base_patch16" in model_id or "deit3_base_patch16" in model_id:
+             m_lrp = vit_LRP(pretrained=True, checkpoint_dir=checkpoint_dir)
+             m_orig = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir)
+        elif "vit_base_patch14_reg4_dinov2" in model_id:
+             # This model likely needs 518 resolution, need to check if we handle transforms for it too?
+             # For now, just load the model.
+             # Use pretrained=False and load weights manually as per user pattern
+             m_lrp = vit_LRP_reg4(pretrained=False, checkpoint_dir=checkpoint_dir, img_size=current_img_size)
+             m_orig = vit_orig_reg4(pretrained=False, checkpoint_dir=checkpoint_dir, img_size=current_img_size)
+             
+             finetuned_path = os.path.join(checkpoint_dir, f"{model_id}_finetuned_best.pth")
+             # Try custom name from models_details.json if available
+             if model_info and model_info.get("finetuned_head_path") and model_info.get("finetuned_head_path") != "-":
+                 finetuned_path = os.path.join(checkpoint_dir, model_info.get("finetuned_head_path"))
+
+             if os.path.exists(finetuned_path):
+                 logger.info(f"Loading fine-tuned weights from {finetuned_path}")
+                 state_dict = torch.load(finetuned_path, map_location=device)
+                 m_lrp.load_state_dict(state_dict, strict=False)
+                 m_orig.load_state_dict(state_dict, strict=False)
+             else:
+                 logger.warning(f"Fine-tuned weights not found at {finetuned_path}. Using random/timm init.")
+
+        else:
+             # Fallback
+             m_lrp = vit_LRP(pretrained=True, checkpoint_dir=checkpoint_dir)
+             m_orig = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir)
+
+        m_lrp = m_lrp.to(device)
+        m_lrp.eval()
+        
+        m_orig = m_orig.to(device)
+        m_orig.eval()
+        
+        model = m_lrp
+        inference_model = m_orig
+        baselines = Baselines(inference_model)
+        attribution_generator = LRP(model)
+        
+        _current_model_id = model_id
+        _current_device = device
+        
+        logger.info(f"Model '{model_id}' loaded successfully on '{device}'.")
+        
+    except Exception as e:
+        logger.error(f"Failed to load model '{model_id}': {e}")
+        traceback.print_exc()
+        raise e
+
+def get_device(requested_device=None):
     if requested_device is None:
-        # Default: use CUDA if available, else CPU
         requested_device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Validate device
     if requested_device == "cuda" and not torch.cuda.is_available():
         logger.warning("CUDA requested but not available, falling back to CPU")
         requested_device = "cpu"
@@ -119,49 +224,29 @@ def get_device(requested_device=None):
     elif requested_device not in ["cpu", "cuda", "mps"]:
         logger.warning(f"Invalid device '{requested_device}', falling back to CPU")
         requested_device = "cpu"
-    
-    # Move models to requested device if different
-    if _current_device != requested_device:
-        logger.info(f"Moving models to device: {requested_device}")
-        model = model.to(requested_device)
-        inference_model = inference_model.to(requested_device)
-        baselines = Baselines(inference_model)
-        attribution_generator = LRP(model)
-        _current_device = requested_device
-    
     return requested_device
 
-# Load models on CPU initially (will be moved to requested device on first use)
+# Initialize default
 try:
-    logger.info("Loading ViT_LRP model...")
-    model = vit_LRP(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-    model.eval()
-    inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-    inference_model.eval()
-    baselines = Baselines(inference_model)
-    logger.info("ViT_LRP models loaded successfully.")
-    attribution_generator = LRP(model)
-    _current_device = "cpu"
-    logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
+    load_models(DEFAULT_MODEL_ID, "cpu")
 except Exception as e:
-    logger.error("Failed to initialize model / LRP:")
-    logger.error(e)
-    traceback.print_exc()
-    raise e  # fail fast so you notice
+    logger.error(f"Startup model load failed: {e}")
 
 
-def compute_attribution_map(original_image, class_index=None, method="transformer_attribution", device="cpu"):
+def compute_attribution_map(original_image, class_index=None, method="transformer_attribution", device="cpu", model_id=DEFAULT_MODEL_ID):
     """
-    original_image: tensor [3, 224, 224] (normalized)
+    original_image: tensor [3, H, W] (normalized)
     class_index: int or None
     method: one of VALID_ATTR_METHODS
     device: str - device to use ('cpu', 'cuda', 'mps')
-    returns: torch.Tensor [224, 224] on CPU, in [0,1]
+    model_id: str - model to use
+    returns: torch.Tensor [H, W] on CPU, in [0,1]
     """
-    # Get and set device
+    # Get and set device / model
     device = get_device(device)
+    load_models(model_id, device)
 
-    # [1, 3, 224, 224] on device, with gradients for LRP
+    # [1, 3, H, W] on device, with gradients for LRP
     input_tensor = original_image.unsqueeze(0).to(device)
     input_tensor.requires_grad_(True)
 
@@ -170,85 +255,53 @@ def compute_attribution_map(original_image, class_index=None, method="transforme
         if method == "attn_gradcam":
             transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
         else:
+            # returns (1, 1, 14, 14) or similar grid
             transformer_attribution = attribution_generator.generate_LRP(
-                input_tensor,
-                method=method,
-                index=class_index
-            )  # tensor on device
-        
-        logger.debug(f"transformer_attribution shape after generate_LRP: {transformer_attribution.shape}, dims: {transformer_attribution.dim()}")
-        
-        # Handle different return shapes from generate_LRP
-        # Ensure we have a 4D tensor [B, C, H, W] for interpolation
-        if transformer_attribution.dim() == 0:
-            raise ValueError(f"Received scalar tensor from generate_LRP (method={method})")
-        elif transformer_attribution.dim() == 1:
-            # 1D tensor - try to reshape to 2D square
-            numel = transformer_attribution.numel()
-            size = int(np.sqrt(numel))
-            if size * size == numel:
-                transformer_attribution = transformer_attribution.reshape(size, size)
-            else:
-                raise ValueError(f"Cannot reshape 1D tensor of size {numel} to square")
-        
-        # Now ensure 2D or higher
+                input_tensor, method=method, index=class_index
+            ).detach()
+
+        # Check dimension and reshape if necessary (e.g. from [1, 196] to [1, 1, 14, 14])
+        logger.debug(f"Shape before reshape check: {transformer_attribution.shape}")
         if transformer_attribution.dim() == 2:
-            # Add batch and channel dims: [H, W] -> [1, 1, H, W]
-            transformer_attribution = transformer_attribution.unsqueeze(0).unsqueeze(0)
-        elif transformer_attribution.dim() == 3:
-            # [C, H, W] or [B, H, W] -> [1, 1, H, W]
-            if transformer_attribution.shape[0] == 1:
-                transformer_attribution = transformer_attribution.unsqueeze(0)
+            # Assume [B, num_patches]
+            b, n = transformer_attribution.shape
+            side = int(n ** 0.5)
+            logger.debug(f"Reshaping 2D tensor: b={b}, n={n}, side={side}, side*side={side*side}")
+            if side * side == n:
+                transformer_attribution = transformer_attribution.reshape(b, 1, side, side)
+                logger.debug(f"Reshaped to: {transformer_attribution.shape}")
             else:
-                # Take first channel or average
-                transformer_attribution = transformer_attribution.mean(dim=0, keepdim=True).unsqueeze(0)
-        elif transformer_attribution.dim() == 4:
-            # Already 4D, but ensure it's [1, 1, H, W]
-            if transformer_attribution.shape[0] != 1:
-                transformer_attribution = transformer_attribution[0:1]
-            if transformer_attribution.shape[1] != 1:
-                transformer_attribution = transformer_attribution.mean(dim=1, keepdim=True)
+                 logger.warning(f"Unable to reshape tensor of shape {transformer_attribution.shape} to square grid")
+
+        elif transformer_attribution.dim() == 3:
+             # scale [B, H, W] -> [B, 1, H, W]
+             if transformer_attribution.shape[1] != 1:
+                 transformer_attribution = transformer_attribution.unsqueeze(1)
         
-        logger.debug(f"transformer_attribution shape after normalization: {transformer_attribution.shape}")
+        logger.debug(f"Shape before interpolate: {transformer_attribution.shape}")
         
-        # Reshape and upscale based on method
-        if method == "full":
-            # Full LRP should already be 224x224 or close
-            if transformer_attribution.shape[-2:] != (224, 224):
-                transformer_attribution = F.interpolate(
-                    transformer_attribution,
-                    size=(224, 224),
-                    mode="bilinear",
-                    align_corners=False,
-                )
+        # 3) Interpolate back to original resolution (usually 224 or 518)
+        # We want to return 224x224 for the UI standard, or should we match current_img_size?
+        # The UI probably expects 224x224 layout or flexible.
+        # Let's upscale to the *tensor's* spatial size to match the image being visualized.
+        target_h, target_w = original_image.shape[-2:] # H, W
+        
+        if method == "rollout":
+             # Rollout might return [1, 1, grid, grid]
+             pass
+
+        elif method == ""
         else:
-            # Other methods: first ensure 14x14, then upscale to 224x224
-            current_h, current_w = transformer_attribution.shape[-2:]
-            if (current_h, current_w) != (14, 14):
-                # Try to reshape if total elements match
-                if current_h * current_w == 14 * 14:
-                    transformer_attribution = transformer_attribution.reshape(1, 1, 14, 14)
-                else:
-                    # Interpolate to 14x14
-                    transformer_attribution = F.interpolate(
-                        transformer_attribution,
-                        size=(14, 14),
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-            
-            # Upscale from 14x14 to 224x224
-            transformer_attribution = F.interpolate(
-                transformer_attribution,
-                size=(224, 224),
-                mode="bilinear",
-                align_corners=False,
-            )
+            # Standard LRP methods return [1, 1, grid, grid]
+            pass
         
-        # Final reshape to [224, 224]
-        transformer_attribution = transformer_attribution.squeeze()
-        if transformer_attribution.dim() != 2:
-            transformer_attribution = transformer_attribution.reshape(224, 224)
+        # Simple interpolation logic
+        transformer_attribution = F.interpolate(
+            transformer_attribution,
+            size=(target_h, target_w),
+            mode="bilinear",
+            align_corners=False,
+        )
             
     except Exception as e:
         logger.error(f"Error processing attribution map: {e}")
@@ -256,47 +309,60 @@ def compute_attribution_map(original_image, class_index=None, method="transforme
         raise
 
     # Normalize to [0,1]
+    # transformer_attribution is [1, 1, H, W]
     min_val = transformer_attribution.min()
     max_val = transformer_attribution.max()
     attr_norm = (transformer_attribution - min_val) / (max_val - min_val + 1e-8)
 
-    # Return on CPU
-    return attr_norm.detach().cpu()
+    # Return on CPU, squeezed to [H, W]
+    return attr_norm[0, 0].detach().cpu()
 # --------------------------
 # Visualization function
 # --------------------------
-def generate_visualization(original_image, class_index=None, method="transformer_attribution", device="cpu"):
+def generate_visualization(original_image, class_index=None, method="transformer_attribution", device="cpu", model_id=DEFAULT_MODEL_ID):
     """
-    original_image: tensor [3, 224, 224] (normalized)
+    original_image: tensor [3, H, W] (normalized)
     device: str - device to use ('cpu', 'cuda', 'mps')
+    model_id: str - model to use
     returns: np.array HxWx3 (BGR, uint8)
     """
-    # 1) get normalized attribution [224,224] on CPU
-    attr = compute_attribution_map(original_image, class_index=class_index, method=method, device=device)  # torch
-    transformer_attribution = attr.numpy()  # [224,224], float32 in [0,1]
+    # 1) get normalized attribution [H, W] on CPU
+    attr = compute_attribution_map(original_image, class_index=class_index, method=method, device=device, model_id=model_id)  # torch
+    transformer_attribution = attr.numpy()  # [H, W], float32 in [0,1]
 
     # 2) prepare original image in [0,1] for overlay
-    image_transformer_attribution = original_image.permute(1, 2, 0).cpu().numpy()
-    img_min = image_transformer_attribution.min()
-    img_max = image_transformer_attribution.max()
-    image_transformer_attribution = (
-        image_transformer_attribution - img_min
-    ) / (img_max - img_min + 1e-8)
+    # This expects original_image to be normalized. We need to denorm it or just expect the UI to handle it.
+    # Actually `vis.show_cam_on_image` expects `img` to be [H, W, 3] in [0,1].
+    
+    # We need to un-normalize original_image to display it properly
+    # Assuming (0.5, 0.5, 0.5) stats for now
+    img_disp = original_image.permute(1, 2, 0).cpu().numpy()
+    img_disp = (img_disp * 0.5) + 0.5
+    img_disp = np.clip(img_disp, 0, 1)
 
-    # 3) overlay heatmap
-    vis = show_cam_on_image(image_transformer_attribution, transformer_attribution)
-    vis = np.uint8(255 * vis)  # [0,255]
-    # vis = cv2.cvtColor(np.array(vis))  # to BGR for OpenCV
+    # 3) blend
+    # Note: `transformer_attribution` might be 518x518, `img_disp` 518x518.
+    # Vis library usually handles matching sizes, but we interpolated attr to match img inside compute_attribution_map.
+    vis = show_cam_on_image(img_disp, transformer_attribution, use_rgb=True)
+    
+    # 4) Convert RGB -> BGR for consistency if OpenCV-like behavior is expected downstream or by frontend
+    # But wait, Flask sends JPEG/PNG. `show_cam_on_image` returns RGB uint8.
+    # If the frontend expects RGB, we are good. 
+    # The previous code had `vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)` maybe?
+    # Let's check previous implementation pattern.
+    vis = np.uint8(255 * vis) # Scale to 0-255
+    vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)  # standard OpenCV format
     return vis
 
-def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="positive", method="transformer_attribution", device="cpu"):
+def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="positive", method="transformer_attribution", device="cpu", model_id=DEFAULT_MODEL_ID):
     """
-    img_raw: [3,224,224] tensor in [0,1]
-    img_norm: [3,224,224] normalized tensor
+    img_raw: [3,H,W] tensor in [0,1]
+    img_norm: [3,H,W] normalized tensor
     target_index: int or None
     perturbation_type: str - 'positive' or 'negative'
     method: str - attribution method
     device: str - device to use ('cpu', 'cuda', 'mps')
+    model_id: str - model to use
 
     returns:
         target_class_idx
@@ -310,16 +376,18 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
            "top1_prob", "target_prob"
         }
     """
-    # Get and set device
+    # Get and set device / model
     device = get_device(device)
+    load_models(model_id, device)
     
-    base_size = 224 * 224
+    base_size = current_img_size * current_img_size
     perturbation_steps = [0.01, 0.05, 0.08, 0.1, 0.15, 0.3, 0.35, 0.4, 0.45]
-
-    # --- Original prediction ---
+    perturbation_results = []
+    
+    # Initial Prediction
     with torch.no_grad():
-        logits = inference_model(img_norm.unsqueeze(0).to(device))  # [1,1000]
-        probs = torch.softmax(logits, dim=1)              # [1,1000]
+        output = inference_model(img_norm.unsqueeze(0).to(device))  # [1,1000]
+        probs = torch.softmax(output, dim=1)              # [1,1000]
         top1_prob, top1_idx = torch.max(probs, dim=1)     # [1]
 
     top1_idx_int = int(top1_idx.item())
@@ -346,8 +414,8 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
     }
 
     # --- Attribution used for perturbation (for target class) ---
-    attr = compute_attribution_map(img_norm, class_index=target_index_int, method=method, device=device)  # [224,224]
-    vis = attr.view(-1)  # [224*224]
+    attr = compute_attribution_map(img_norm, class_index=target_index_int, method=method, device=device, model_id=model_id)  # [H,W]
+    vis = attr.view(-1)  # [H*W]
     
     # Positive: perturb highest-attribution pixels
     # Negative: perturb lowest-attribution pixels => use -vis
@@ -355,15 +423,13 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
         vis = -vis
 
     # --- Prepare data ---
-    data = img_raw.unsqueeze(0)  # [1,3,224,224]
+    data = img_raw.unsqueeze(0)  # [1,3,H,W]
     org_shape = data.shape       # [B,C,H,W]
-
-    perturbation_results = []
 
     for frac in perturbation_steps:
         k = int(base_size * frac)
 
-        _data = data.clone()  # [1,3,224,224]
+        _data = data.clone()  # [1,3,H,W]
 
         # top-k indices in attribution
         _, idx = torch.topk(vis, k, dim=-1)  # [k]
@@ -372,18 +438,18 @@ def run_perturbation(img_raw, img_norm, target_index=None,perturbation_type="pos
             org_shape[0], org_shape[1], 1
         )  # [1,3,k]
 
-        _data_flat = _data.view(org_shape[0], org_shape[1], -1)  # [1,3,224*224]
+        _data_flat = _data.view(org_shape[0], org_shape[1], -1)  # [1,3,H*W]
         _data_flat.scatter_(-1, idx_expanded, 0.0)
 
-        _data_perturbed = _data_flat.view(org_shape)  # [1,3,224,224]
+        _data_perturbed = _data_flat.view(org_shape)  # [1,3,H,W]
 
         # re-normalize before model
-        pert_single = _data_perturbed.squeeze(0)      # [3,224,224] in [0,1]
-        pert_norm = normalize(pert_single).unsqueeze(0).to(device)  # [1,3,224,224]
+        pert_single = _data_perturbed.squeeze(0)      # [3,H,W] in [0,1]
+        pert_norm = transform(transforms.ToPILImage()(pert_single)).unsqueeze(0).to(device) # Re-apply transform to ensure correct normalization
 
         with torch.no_grad():
-            logits_p = inference_model(pert_norm)
-            probs_p = torch.softmax(logits_p, dim=1)
+            output_p = inference_model(pert_norm)
+            probs_p = torch.softmax(output_p, dim=1)
             top1_prob_p, top1_idx_p = torch.max(probs_p, dim=1)
             top1_idx_p_int = int(top1_idx_p.item())
             top1_prob_p_float = float(top1_prob_p.item())
@@ -446,19 +512,31 @@ def heatmap():
     if method not in VALID_ATTR_METHODS:
         return jsonify({"error": f"Invalid method '{method}'. Must be one of: {', '.join(VALID_ATTR_METHODS)}"}), 400
     
+    # If the user uploads an image, we resize it to the CURRENT model's resolution
+    # But wait, the previous cells defined `transform` globally but `load_models` updates it.
+    # We need to make sure we use the *current* transform for the *current* model.
+    # However, model loading happens *after* we might parse the request?
+    # No, we should load model first.
+    
+    # Extract model_id FIRST
+    model_id = request.form.get("model_id", DEFAULT_MODEL_ID)
+    
     # device selection
     device = request.form.get("device", "cpu")
     if device not in ["cpu", "cuda", "mps"]:
         device = "cpu"
         logger.warning(f"Invalid device requested, using CPU")
 
+    # Ensure model is loaded (and global transform updated)
+    load_models(model_id, device)
+
     try:
-        # Read and preprocess image
+        # Read and preprocess image using the UPDATED transform
         logger.debug("Opening image with PIL...")
         img = Image.open(file.stream).convert("RGB")
         logger.debug(f"Image opened: size={img.size}, mode={img.mode}")
 
-        logger.debug("Applying torchvision transforms...")
+        logger.debug(f"Applying torchvision transforms (size={current_img_size})...")
         img_tensor = transform(img)
         logger.debug(
             f"Image transformed: shape={tuple(img_tensor.shape)}, "
@@ -466,8 +544,8 @@ def heatmap():
         )
 
         # Optionally, you could pick a specific class_index
-        logger.debug(f"Generating visualization on device: {device}...")
-        vis_bgr = generate_visualization(img_tensor, class_index=class_index, method=method, device=device)
+        logger.debug(f"Generating visualization on device: {device}, model: {model_id}...")
+        vis_bgr = generate_visualization(img_tensor, class_index=class_index, method=method, device=device, model_id=model_id)
 
         logger.debug(
             f"Visualization generated: vis_bgr.shape={vis_bgr.shape}, "
@@ -520,15 +598,21 @@ def perturbation():
     if method not in VALID_ATTR_METHODS:
         return jsonify({"error": f"Invalid method '{method}'. Must be one of: {', '.join(VALID_ATTR_METHODS)}"}), 400
     
+    # model selection
+    model_id = request.form.get("model_id", DEFAULT_MODEL_ID)
+    
     # device selection
     device = request.form.get("device", "cpu")
     if device not in ["cpu", "cuda", "mps"]:
         device = "cpu"
         logger.warning(f"Invalid device requested, using CPU")
 
+    # Load model & update transform
+    load_models(model_id, device)
+
     try:
         img = Image.open(file.stream).convert("RGB")
-        img_norm = transform(img)            # normalized [3,224,224]
+        img_norm = transform(img)            # normalized [3,H,W]
         img_raw = img_norm * 0.5 + 0.5       # undo norm → [0,1]
 
         (
@@ -543,6 +627,7 @@ def perturbation():
             perturbation_type=perturbation_type,
             method=method,
             device=device,
+            model_id=model_id,
         )
 
         return jsonify({
@@ -577,16 +662,19 @@ def infer():
         device = "cpu"
         logger.warning(f"Invalid device requested, using CPU")
     
+    model_id = request.form.get("model_id", DEFAULT_MODEL_ID)
+
     # Get and set device (move models if needed)
     device = get_device(device)
+    load_models(model_id, device)
 
     try:
         img = Image.open(file.stream).convert("RGB")
-        img_norm = transform(img)  # [3,224,224]
+        img_t = transform(img).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            logits = inference_model(img_norm.unsqueeze(0).to(device))  # [1,num_classes]
-            probs = torch.softmax(logits, dim=1)
+            output = inference_model(img_t)  # [1,num_classes]
+            probs = torch.softmax(output, dim=1)
 
         # Top-5
         topk = 5
@@ -608,16 +696,16 @@ def infer():
         logger.error("Error in /api/infer:", e)
         return jsonify({"error": str(e)}), 500
 
+
+
 @app.route("/api/models", methods=["GET"])
-def get_models():
+def list_models():
     """
     Returns a list of available models from models_details.json
     """
     logger.info("➡️ /api/models called")
     try:
-        details_path = os.path.join(_script_dir, "models_details.json")
-        with open(details_path, "r") as f:
-            all_models = json.load(f)
+        all_models = get_models_details_json()
         
         # Filter for filtering available models if needed, 
         # or return all and let frontend decide?

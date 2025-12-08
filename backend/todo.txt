@@ -1,0 +1,3 @@
+Get model_id from the frontend, 
+Do the generate_heatmap only if the model is 
+Host vit_base_patch14_reg4_dinov2; 

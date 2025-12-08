@@ -17,14 +17,18 @@ from utils.iou import IoU
 from data.Imagenet import Imagenet_Segmentation
 
 from ViT_explanation_generator import Baselines, LRP
-from ViT_new import vit_base_patch16_224
-from ViT_LRP import vit_base_patch16_224 as vit_LRP
-from ViT_orig_LRP import vit_base_patch16_224 as vit_orig_LRP
+
 
 from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 
 import torch.nn.functional as F
+
+import warnings
+from sklearn.exceptions import UndefinedMetricWarning
+
+# Ignore F-score warnings caused by 0/0 division
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 plt.switch_backend('agg')
 
@@ -57,49 +61,97 @@ cls = ['airplane',
 
 # Args
 parser = argparse.ArgumentParser(description='Training multi-class classifier')
+
+# Specifies the model architecture name (e.g., 'vgg', 'vit'). 
+# Used primarily for naming the results/checkpoints directory.
 parser.add_argument('--arc', type=str, default='vgg', metavar='N',
                     help='Model architecture')
+
+# Specifies the name of the dataset being used for testing (default: ImageNet).
 parser.add_argument('--train_dataset', type=str, default='imagenet', metavar='N',
                     help='Testing Dataset')
+
+# The core XAI algorithm to evaluate. 
+# Options include:
+# - 'rollout': Attention Rollout (accumulating attention across layers).
+# - 'lrp': Layer-wise Relevance Propagation.
+# - 'transformer_attribution': The specific method proposed in this research.
+# - 'full_lrp', 'lrp_last_layer': Variations of LRP.
+# - 'attn_gradcam': Attention-based GradCAM.
 parser.add_argument('--method', type=str,
                     default='grad_rollout',
-                    choices=[ 'rollout', 'lrp','transformer_attribution', 'full_lrp', 'lrp_last_layer',
-                              'attn_last_layer', 'attn_gradcam'],
-                    help='')
+                    choices=['rollout', 'lrp', 'transformer_attribution', 'full_lrp', 'lrp_last_layer',
+                             'attn_last_layer', 'attn_gradcam'],
+                    help='Method of explanation/attribution to evaluate')
+
+# Threshold value used to generate the binary segmentation mask from the heatmap.
+# If 0 (default), the script usually calculates a dynamic threshold (like the mean).
 parser.add_argument('--thr', type=float, default=0.,
-                    help='threshold')
+                    help='Threshold for generating binary masks from heatmaps')
+
+# Determines how many top classes to consider (Top-K) when generating explanations.
+# Usually 1 for generating an explanation for the most likely class.
 parser.add_argument('--K', type=int, default=1,
-                    help='new - top K results')
+                    help='Top K results to generate explanations for')
+
+# Boolean flag. If present, the script will save visual results to disk
+# (Input image, Ground Truth mask, Predicted Heatmap, Overlay).
 parser.add_argument('--save-img', action='store_true',
                     default=False,
-                    help='')
+                    help='If set, saves the input images and resulting heatmaps')
+
+# --- Ablation / Control Flags (Likely specific to LRP internal logic) ---
+# "no-ia": Likely "No Input x Activation" or similar rule adjustment.
 parser.add_argument('--no-ia', action='store_true',
                     default=False,
-                    help='')
+                    help='Disable specific interaction rule (implementation dependent)')
+
+# "no-fx": Likely disables a specific function/rule in the attribution pass.
 parser.add_argument('--no-fx', action='store_true',
                     default=False,
-                    help='')
+                    help='Disable specific function/rule X')
+
+# "no-fgx": Likely disables Foreground X rule.
 parser.add_argument('--no-fgx', action='store_true',
                     default=False,
-                    help='')
+                    help='Disable specific foreground rule')
+
+# "no-m": Likely disables momentum or a specific masking operation.
 parser.add_argument('--no-m', action='store_true',
                     default=False,
-                    help='')
+                    help='Disable specific masking/momentum rule')
+
+# "no-reg": Disables regularization during the attribution generation.
 parser.add_argument('--no-reg', action='store_true',
                     default=False,
-                    help='')
+                    help='Disable regularization')
+
+# Boolean flag to indicate if this run is an ablation study (testing components in isolation).
+# This is passed to the LRP generator to change internal behaviors.
 parser.add_argument('--is-ablation', type=bool,
                     default=False,
-                    help='')
-parser.add_argument('--imagenet-seg-path', type=str, required=True)
+                    help='Flag to indicate if this is an ablation study run')
+
+# Mandatory argument. The file path to the ImageNet Segmentation dataset (Ground Truth masks).
+# Required to calculate IoU and Pixel Accuracy.
+parser.add_argument('--imagenet-seg-path', type=str, required=True,
+                    help='Path to the ImageNet GT Segmentation folder')
+
+
+parser.add_argument('--model-name', type=str, default="vit-base", 
+                    choices=["vit-base", "vit-large", "vit-huge", "dino-small", "dino-base", "dino-large"],
+                    help='Name of the model to evaluate')
+
+parser.add_argument('--num-samples', type=int, default=None,
+                    help='Number of samples to evaluate')
+
 args = parser.parse_args()
 
 args.checkname = args.method + '_' + args.arc
 
 alpha = 2
 
-cuda = torch.cuda.is_available()
-device = torch.device("cuda" if cuda else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Define Saver
 saver = Saver(args)
@@ -129,27 +181,81 @@ test_lbl_trans = transforms.Compose([
     transforms.Resize((224, 224), Image.NEAREST),
 ])
 
-ds = Imagenet_Segmentation(args.imagenet_seg_path,
+
+imagenet_eval_dataset = Imagenet_Segmentation(args.imagenet_seg_path, 
+                            num_samples=args.num_samples,
                            transform=test_img_trans, target_transform=test_lbl_trans)
-dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=1, drop_last=False)
+imagenet_eval_dataloader = DataLoader(imagenet_eval_dataset, batch_size=batch_size, shuffle=False, num_workers=1, drop_last=False)
 
-# Model
-model = vit_base_patch16_224(pretrained=True).cuda()
-baselines = Baselines(model)
+print("length of the dataset", len(imagenet_eval_dataset))
+print("length of the dataloader", len(imagenet_eval_dataloader))
+print("batch size", batch_size)
+print("number of samples", args.num_samples)
 
-# LRP
-model_LRP = vit_LRP(pretrained=True).cuda()
-model_LRP.eval()
-lrp = LRP(model_LRP)
+print(f"Evaluating {args.model_name} with {args.method} method")
+print(f"Using {args.num_samples} samples")
+print(f"Using {args.imagenet_seg_path} as the dataset")
 
-# orig LRP
-model_orig_LRP = vit_orig_LRP(pretrained=True).cuda()
-model_orig_LRP.eval()
-orig_lrp = LRP(model_orig_LRP)
+if args.model_name == "vit-base":
+    from ViT_new import vit_base_patch16_224
+    from ViT_LRP import vit_base_patch16_224 as vit_LRP
+    from ViT_orig_LRP import vit_base_patch16_224 as vit_orig_LRP
+
+    # Model
+    model = vit_base_patch16_224(pretrained=True).cuda()
+    baselines = Baselines(model)
+
+    # LRP
+    model_LRP = vit_LRP(pretrained=True).cuda()
+    model_LRP.eval()
+    lrp = LRP(model_LRP)
+
+    # orig LRP
+    model_orig_LRP = vit_orig_LRP(pretrained=True).cuda()
+    model_orig_LRP.eval()
+    orig_lrp = LRP(model_orig_LRP)
+
+elif args.model_name == "vit-large":
+
+    from ViT_new import vit_large_patch16_224
+    from ViT_LRP import vit_large_patch16_224 as vit_LRP
+    from ViT_orig_LRP import vit_large_patch16_224 as vit_orig_LRP
+
+    # Model
+    model = vit_large_patch16_224(pretrained=True).cuda()
+    baselines = Baselines(model)
+
+    # LRP
+    model_LRP = vit_LRP(pretrained=True).cuda()
+    model_LRP.eval()
+    lrp = LRP(model_LRP)
+
+    # orig LRP
+    model_orig_LRP = vit_orig_LRP(pretrained=True).cuda()
+    model_orig_LRP.eval()
+    orig_lrp = LRP(model_orig_LRP)
+
+elif args.model_name == "vit-huge":
+    # TO BE IMPLEMENTED
+    pass 
+
+elif args.model_name == "dino-small":
+    # TO BE IMPLEMENTED
+    pass 
+
+elif args.model_name == "dino-base":
+    # TO BE IMPLEMENTED
+    pass 
+elif args.model_name == "dino-large":
+    # TO BE IMPLEMENTED
+    pass 
+else:
+    raise ValueError(f"Model name {args.model_name} not supported")
+
 
 metric = IoU(2, ignore_index=-1)
 
-iterator = tqdm(dl)
+iterator = tqdm(imagenet_eval_dataloader)
 
 model.eval()
 
@@ -157,7 +263,7 @@ model.eval()
 def compute_pred(output):
     pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
     # pred[0, 0] = 282
-    # print('Pred cls : ' + str(pred))
+    print('Pred cls : ' + str(pred))
     T = pred.squeeze().cpu().numpy()
     T = np.expand_dims(T, 0)
     T = (T[:, np.newaxis] == np.arange(1000)) * 1.0
@@ -288,8 +394,8 @@ for batch_idx, (image, labels) in enumerate(iterator):
     else:
         images = image.cuda()
     labels = labels.cuda()
-    # print("image", image.shape)
-    # print("lables", labels.shape)
+    print("image", image.shape)
+    print("lables", labels.shape)
 
     correct, labeled, inter, union, ap, f1, pred, target = eval_batch(images, labels, model, batch_idx)
 

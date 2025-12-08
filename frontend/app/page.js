@@ -13,14 +13,30 @@ export default function Page() {
   const [availableModels, setAvailableModels] = useState([]);
   const perturbSectionRef = useRef(null);
 
+  /* New: handle model change to notify backend */
+  const handleModelChange = async (newModelId) => {
+    setModelId(newModelId);
+    try {
+      await fetch(`${API_BASE}/api/selected_model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_id: newModelId }),
+      });
+      console.log(`Notified backend of selected model: ${newModelId}`);
+    } catch (err) {
+      console.error("Failed to set selected model on backend:", err);
+    }
+  };
+
   useEffect(() => {
     fetch(`${API_BASE}/api/models`)
       .then((res) => res.json())
       .then((data) => {
         if (data.models && data.models.length > 0) {
           setAvailableModels(data.models);
-          // Set default to first available model
-          setModelId(data.models[0].model_id);
+          // Set default to first available model and notify backend
+          const defaultModel = data.models[0].model_id;
+          handleModelChange(defaultModel);
         }
       })
       .catch((err) => console.error("Failed to fetch models:", err));
@@ -513,7 +529,7 @@ export default function Page() {
           <span className="text-sm font-semibold">model_id:</span>
           <select
             value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
+            onChange={(e) => handleModelChange(e.target.value)}
             style={{ backgroundColor: '#0d1117', borderColor: '#30363d' }}
             className="px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500"
           >

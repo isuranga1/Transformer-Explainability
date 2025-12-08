@@ -608,6 +608,36 @@ def infer():
         logger.error("Error in /api/infer:", e)
         return jsonify({"error": str(e)}), 500
 
+SELECTED_MODEL_ID = None
+
+@app.route("/api/selected_model", methods=["POST"])
+def set_selected_model():
+    """
+    Set the selected model for the session.
+    Expects JSON with {"model_id": "model_id_here"}.
+    """
+    global SELECTED_MODEL_ID
+    logger.info("➡️ /api/selected_model called")
+    
+    try:
+        data = request.get_json()
+        if not data or "model_id" not in data:
+            return jsonify({"error": "Missing 'model_id' in request body"}), 400
+        
+        model_id = data["model_id"]
+        
+        
+
+        SELECTED_MODEL_ID = model_id
+        logger.debug(f"Setting global selected model: {SELECTED_MODEL_ID}")
+        
+        return jsonify({"selected_model": SELECTED_MODEL_ID}), 200
+    
+    except Exception as e:
+        logger.error(f"Error setting selected model: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/models", methods=["GET"])
 def get_models():
     """

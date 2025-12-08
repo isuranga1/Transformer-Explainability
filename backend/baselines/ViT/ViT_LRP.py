@@ -4,11 +4,11 @@ Hacked together by / Copyright 2020 Ross Wightman
 import torch
 import torch.nn as nn
 from einops import rearrange
-from baselines.modules.layers_ours import *
+from chefer_explain.baselines.modules.layers_ours import *
 
-from baselines.ViT.helpers import load_pretrained
-from baselines.ViT.weight_init import trunc_normal_
-from baselines.ViT.layer_helpers import to_2tuple
+from chefer_explain.baselines.ViT.helpers import load_pretrained
+from chefer_explain.baselines.ViT.weight_init import trunc_normal_
+from chefer_explain.baselines.ViT.layer_helpers import to_2tuple
 
 
 def _cfg(url='', **kwargs):
@@ -177,16 +177,30 @@ class Attention(nn.Module):
         return self.qkv.relprop(cam_qkv, **kwargs)
 
 
+class LayerScale(nn.Module):
+    def __init__(self, dim, init_values=1e-5, inplace=False):
+        super().__init__()
+        self.inplace = inplace
+        self.gamma = nn.Parameter(init_values * torch.ones(dim))
+
+    def forward(self, x):
+        return x.mul_(self.gamma) if self.inplace else x * self.gamma
+
+    def relprop(self, cam, **kwargs):
+        return cam
+
 class Block(nn.Module):
 
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.):
+    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0., init_values=None):
         super().__init__()
         self.norm1 = LayerNorm(dim, eps=1e-6)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.ls1 = LayerScale(dim, init_values=init_values) if init_values is not None else nn.Identity()
         self.norm2 = LayerNorm(dim, eps=1e-6)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, drop=drop)
+        self.ls2 = LayerScale(dim, init_values=init_values) if init_values is not None else nn.Identity()
 
         self.add1 = Add()
         self.add2 = Add()
@@ -195,18 +209,22 @@ class Block(nn.Module):
 
     def forward(self, x):
         x1, x2 = self.clone1(x, 2)
-        x = self.add1([x1, self.attn(self.norm1(x2))])
+        x = self.add1([x1, self.ls1(self.attn(self.norm1(x2)))])
         x1, x2 = self.clone2(x, 2)
-        x = self.add2([x1, self.mlp(self.norm2(x2))])
+        x = self.add2([x1, self.ls2(self.mlp(self.norm2(x2)))])
         return x
 
     def relprop(self, cam, **kwargs):
         (cam1, cam2) = self.add2.relprop(cam, **kwargs)
+        if isinstance(self.ls2, LayerScale):
+            cam2 = self.ls2.relprop(cam2, **kwargs)
         cam2 = self.mlp.relprop(cam2, **kwargs)
         cam2 = self.norm2.relprop(cam2, **kwargs)
         cam = self.clone2.relprop((cam1, cam2), **kwargs)
 
         (cam1, cam2) = self.add1.relprop(cam, **kwargs)
+        if isinstance(self.ls1, LayerScale):
+            cam2 = self.ls1.relprop(cam2, **kwargs)
         cam2 = self.attn.relprop(cam2, **kwargs)
         cam2 = self.norm1.relprop(cam2, **kwargs)
         cam = self.clone1.relprop((cam1, cam2), **kwargs)
@@ -241,26 +259,29 @@ class PatchEmbed(nn.Module):
                      (self.img_size[0] // self.patch_size[0]), (self.img_size[1] // self.patch_size[1]))
         return self.proj.relprop(cam, **kwargs)
 
-
+# ViT_LRP
 class VisionTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
     """
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
-                 num_heads=12, mlp_ratio=4., qkv_bias=False, mlp_head=False, drop_rate=0., attn_drop_rate=0.):
+                 num_heads=12, mlp_ratio=4., qkv_bias=False, mlp_head=False, drop_rate=0., attn_drop_rate=0., num_registers=0, init_values=None):
         super().__init__()
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        self.num_registers = num_registers
         self.patch_embed = PatchEmbed(
                 img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
 
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1 + num_registers, embed_dim))
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        if num_registers > 0:
+            self.reg_token = nn.Parameter(torch.zeros(1, num_registers, embed_dim))
 
         self.blocks = nn.ModuleList([
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias,
-                drop=drop_rate, attn_drop=attn_drop_rate)
+                drop=drop_rate, attn_drop=attn_drop_rate, init_values=init_values)
             for i in range(depth)])
 
         self.norm = LayerNorm(embed_dim)
@@ -275,6 +296,8 @@ class VisionTransformer(nn.Module):
         # normal / trunc normal w/ std == .02 similar to other Bert like transformers
         trunc_normal_(self.pos_embed, std=.02)  # embeddings same as weights?
         trunc_normal_(self.cls_token, std=.02)
+        if num_registers > 0:
+            trunc_normal_(self.reg_token, std=.02)
         self.apply(self._init_weights)
 
         self.pool = IndexSelect()
@@ -300,14 +323,20 @@ class VisionTransformer(nn.Module):
 
     @property
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
+        return {'pos_embed', 'cls_token', 'reg_token'}
 
     def forward(self, x):
         B = x.shape[0]
         x = self.patch_embed(x)
 
         cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        x = torch.cat((cls_tokens, x), dim=1)
+        
+        if self.num_registers > 0:
+            reg_tokens = self.reg_token.expand(B, -1, -1)
+            x = torch.cat((cls_tokens, reg_tokens, x), dim=1)
+        else:
+            x = torch.cat((cls_tokens, x), dim=1)
+            
         x = self.add([x, self.pos_embed])
 
         x.register_hook(self.save_inp_grad)
@@ -316,9 +345,7 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        # Ensure indices is a proper tensor (not scalar) for MPS compatibility
-        indices = torch.tensor([0], device=x.device, dtype=torch.long)
-        x = self.pool(x, dim=1, indices=indices)
+        x = self.pool(x, dim=1, indices=torch.tensor(0, device=x.device))
         x = x.squeeze(1)
         x = self.head(x)
         return x
@@ -352,10 +379,10 @@ class VisionTransformer(nn.Module):
                 avg_heads = (attn_heads.sum(dim=1) / attn_heads.shape[1]).detach()
                 attn_cams.append(avg_heads)
             cam = compute_rollout_attention(attn_cams, start_layer=start_layer)
-            cam = cam[:, 0, 1:]
+            # Skip CLS and Registers
+            cam = cam[:, 0, 1+self.num_registers:]
             return cam
         
-        # our method, method name grad is legacy
         elif method == "transformer_attribution" or method == "grad":
             cams = []
             for blk in self.blocks:
@@ -367,7 +394,9 @@ class VisionTransformer(nn.Module):
                 cam = cam.clamp(min=0).mean(dim=0)
                 cams.append(cam.unsqueeze(0))
             rollout = compute_rollout_attention(cams, start_layer=start_layer)
-            cam = rollout[:, 0, 1:]
+            
+            # Skip CLS and Registers
+            cam = rollout[:, 0, 1+self.num_registers:]
             return cam
             
         elif method == "last_layer":
@@ -378,14 +407,16 @@ class VisionTransformer(nn.Module):
                 grad = grad[0].reshape(-1, grad.shape[-1], grad.shape[-1])
                 cam = grad * cam
             cam = cam.clamp(min=0).mean(dim=0)
-            cam = cam[0, 1:]
+            # Skip CLS and Registers
+            cam = cam[0, 1+self.num_registers:]
             return cam
 
         elif method == "last_layer_attn":
             cam = self.blocks[-1].attn.get_attn()
             cam = cam[0].reshape(-1, cam.shape[-1], cam.shape[-1])
             cam = cam.clamp(min=0).mean(dim=0)
-            cam = cam[0, 1:]
+            # Skip CLS and Registers
+            cam = cam[0, 1+self.num_registers:]
             return cam
 
         elif method == "second_layer":
@@ -396,7 +427,8 @@ class VisionTransformer(nn.Module):
                 grad = grad[0].reshape(-1, grad.shape[-1], grad.shape[-1])
                 cam = grad * cam
             cam = cam.clamp(min=0).mean(dim=0)
-            cam = cam[0, 1:]
+            # Skip CLS and Registers
+            cam = cam[0, 1+self.num_registers:]
             return cam
 
 
@@ -409,16 +441,14 @@ def _conv_filter(state_dict, patch_size=16):
         out_dict[k] = v
     return out_dict
 
+# ViT_LRP
 def vit_base_patch16_224(pretrained=False, **kwargs):
-    # Extract checkpoint_dir before passing kwargs to VisionTransformer
-    checkpoint_dir = kwargs.pop('checkpoint_dir', None)
     model = VisionTransformer(
         patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, **kwargs)
     model.default_cfg = default_cfgs['vit_base_patch16_224']
     if pretrained:
         load_pretrained(
-            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), 
-            filter_fn=_conv_filter, checkpoint_dir=checkpoint_dir)
+            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3), filter_fn=_conv_filter)
     return model
 
 def vit_large_patch16_224(pretrained=False, **kwargs):
@@ -439,4 +469,22 @@ def deit_base_patch16_224(pretrained=False, **kwargs):
             map_location="cpu", check_hash=True
         )
         model.load_state_dict(checkpoint["model"])
+    return model
+
+def vit_base_patch14_reg4_dinov2(pretrained=False, **kwargs):
+    model = VisionTransformer(
+        patch_size=14, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, num_registers=4, init_values=1e-5, **kwargs)
+    model.default_cfg = _cfg()
+    return model
+
+def deit3_base_patch16_224(pretrained=False, **kwargs):
+    model = VisionTransformer(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True, init_values=1e-4, **kwargs)
+    model.default_cfg = _cfg()
+    return model
+
+def deit3_small_patch16_224(pretrained=False, **kwargs):
+    model = VisionTransformer(
+        patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True, init_values=1e-4, **kwargs)
+    model.default_cfg = _cfg()
     return model

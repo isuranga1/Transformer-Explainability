@@ -141,7 +141,7 @@
     "has_registers": false,
     "input_image_resolution": 518,
     "patch_size": 14,
-    "finetuned_head_path": "vit_base_patch14_dinov2_in1k_best.pth"
+    "finetuned_head_path": "model_checkpoints/head_finetuned/vit_base_patch14_reg4_dinov2_head_finetuned_best.pth"
   },
   {
     "model_id": "vit_small_patch14_reg4_dinov2",

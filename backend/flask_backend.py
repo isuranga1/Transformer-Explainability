@@ -31,9 +31,11 @@ logger.info("Starting Flask + ViT-LRP server...")
 # --------------------------
 # Your ViT + LRP imports
 # --------------------------
-from baselines.ViT.ViT_LRP import vit_base_patch16_224 as vit_LRP
+from baselines.ViT.ViT_LRP import vit_base_patch16_224
 from baselines.ViT.ViT_explanation_generator import Baselines,LRP
 from baselines.ViT.ViT_new import vit_base_patch16_224 as vit_orig
+
+from baselines.ViT.ViT_LRP import vit_base_patch14_reg4_dinov2
 
 
 # --------------------------
@@ -142,17 +144,38 @@ def get_device(requested_device=None):
 
 # Load models on CPU initially (will be moved to requested device on first use)
 try:
-    logger.info("Loading ViT_LRP model...")
-    model = vit_LRP(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-    model.eval()
-    inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-    inference_model.eval()
-    baselines = Baselines(inference_model)
-    logger.info("ViT_LRP models loaded successfully.")
-    attribution_generator = LRP(model)
-    _current_device = "cpu"
-    logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
-except Exception as e:
+
+    if SELECTED_MODEL_ID == "vit_base_patch16_224.augreg2_in21k_ft_in1k":
+        logger.info(f"Loading {SELECTED_MODEL_ID} ViT LRP model...")
+        model = vit_base_patch16_224(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
+        model.eval()
+        inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
+        inference_model.eval()
+        baselines = Baselines(inference_model)
+        logger.info("ViT_LRP models loaded successfully.")
+        attribution_generator = LRP(model)
+        _current_device = "cpu"
+        logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
+    
+    elif SELECTED_MODEL_ID == "vit_base_patch14_reg4_dinov2":
+        logger.info(f"Loading {SELECTED_MODEL_ID} ViT LRP model...")
+
+        model_details_dict = all_model_details_dict[SELECTED_MODEL_ID]
+        model = vit_base_patch14_reg4_dinov2(
+            pretrained = False, 
+            checkpoint_dir = model_details_dict["finetuned_head_path"]
+        ).to("cpu")
+        model.eval()
+        inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
+        inference_model.eval()
+        baselines = Baselines(inference_model)
+        logger.info("ViT_LRP models loaded successfully.")
+        attribution_generator = LRP(model)
+        _current_device = "cpu"
+        logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
+        
+        
+        except Exception as e:
     logger.error("Failed to initialize model / LRP:")
     logger.error(e)
     traceback.print_exc()
@@ -192,9 +215,10 @@ def compute_attribution_map(original_image, class_index=None, method="transforme
         
         elif SELECTED_MODEL_ID == "vit_base_patch14_reg4_dinov2":
 
-           
+            model_lrp = vit_base_patch14_reg4_dinov2(pretrained=False, img_size=518).to(device)
 
-            # TODO: 
+            model_details = all_model_details_dict[SELECTED_MODEL_ID]
+            
             if method == "attn_gradcam":
                 transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
             else:

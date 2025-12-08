@@ -153,7 +153,7 @@
     "finetuned_head_path": "-"
   },
   {
-    "model_id": "vit_base_patch14_reg4_dinov2",
+    "model_id": "vit_base_patch14_reg4_dinov2.lvd142m",
     "available": true,
     "backbone_only": true,
     "has_registers": true,

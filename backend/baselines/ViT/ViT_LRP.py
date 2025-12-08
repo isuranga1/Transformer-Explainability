@@ -4,11 +4,11 @@ Hacked together by / Copyright 2020 Ross Wightman
 import torch
 import torch.nn as nn
 from einops import rearrange
-from chefer_explain.baselines.modules.layers_ours import *
+from baselines.modules.layers_ours import *
 
-from chefer_explain.baselines.ViT.helpers import load_pretrained
-from chefer_explain.baselines.ViT.weight_init import trunc_normal_
-from chefer_explain.baselines.ViT.layer_helpers import to_2tuple
+from baselines.ViT.helpers import load_pretrained
+from baselines.ViT.weight_init import trunc_normal_
+from baselines.ViT.layer_helpers import to_2tuple
 
 
 def _cfg(url='', **kwargs):

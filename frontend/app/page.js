@@ -569,6 +569,13 @@ export default function Page() {
               className="p-6 rounded-lg border space-y-4"
               style={{ backgroundColor: '#161b22', borderColor: '#30363d' }}
             >
+              <div className="space-y-1 pb-2 border-b border-gray-700">
+                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">Selected Model ID</span>
+                <p className="text-sm font-mono text-blue-400 break-all">{modelId || "None Selected"}</p>
+              </div>
+
+
+
               <div className="space-y-2">
                 <label className="block text-sm font-semibold text-gray-400">
                   Attribution Method

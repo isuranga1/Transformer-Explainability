@@ -103,8 +103,14 @@ for i, item in enumerate(all_model_details_json_list):
 
 
 # Track current device for models
-_current_device = None
-SELECTED_MODEL_ID = None
+_current_device = "cpu"
+SELECTED_MODEL_ID = "vit_base_patch16_224.augreg2_in21k_ft_in1k"
+
+# Global model placeholders
+model = None
+inference_model = None
+baselines = None
+attribution_generator = None
 
 def get_device(requested_device=None):
     """
@@ -134,52 +140,127 @@ def get_device(requested_device=None):
     # Move models to requested device if different
     if _current_device != requested_device:
         logger.info(f"Moving models to device: {requested_device}")
-        model = model.to(requested_device)
-        inference_model = inference_model.to(requested_device)
-        baselines = Baselines(inference_model)
-        attribution_generator = LRP(model)
+        if model is not None:
+            model = model.to(requested_device)
+        if inference_model is not None:
+            inference_model = inference_model.to(requested_device)
+            # Re-init baselines if needed? Baselines usually just holds ref to model, 
+            # but if model moved, baselines.model ref should still be valid as model is object.
+            # However, Baselines init might store something device specific?
+            baselines = Baselines(inference_model)
+        
+        if model is not None:
+            attribution_generator = LRP(model)
+            
         _current_device = requested_device
     
     return requested_device
 
-# Load models on CPU initially (will be moved to requested device on first use)
-try:
-
-    if SELECTED_MODEL_ID == "vit_base_patch16_224.augreg2_in21k_ft_in1k":
-        logger.info(f"Loading {SELECTED_MODEL_ID} ViT LRP model...")
-        model = vit_base_patch16_224(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-        model.eval()
-        inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-        inference_model.eval()
-        baselines = Baselines(inference_model)
-        logger.info("ViT_LRP models loaded successfully.")
-        attribution_generator = LRP(model)
-        _current_device = "cpu"
-        logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
+def load_model_by_id(model_id):
+    global model, inference_model, baselines, attribution_generator, _current_device, SELECTED_MODEL_ID
     
-    elif SELECTED_MODEL_ID == "vit_base_patch14_reg4_dinov2":
-        logger.info(f"Loading {SELECTED_MODEL_ID} ViT LRP model...")
+    logger.info(f"Loading model: {model_id}...")
+    
+    # Use current device for loading if possible, or load cpu then move
+    target_device = _current_device
+    
+    try:
+        if model_id == "vit_base_patch16_224.augreg2_in21k_ft_in1k":
+            # Original default model logic
+            # Removed incorrect checkpoint_dir argument
+            model = vit_base_patch16_224(pretrained=True).to(target_device)
+            model.eval()
+            
+            inference_model = vit_orig(pretrained=True).to(target_device)
+            inference_model.eval()
+            
+        elif model_id == "vit_base_patch14_reg4_dinov2.lvd142m":
+            # Specific logic for DINOv2 model
+            # 1. Initialize LRP-compatible model
+            model = vit_base_patch14_reg4_dinov2(
+                pretrained=False, 
+                img_size=518
+            )
+            
+            # 2. Replace head to match checkpoint (Linear instead of MLP or default)
+            # ViT Base hidden dim is 768
+            model.head = torch.nn.Linear(
+                in_features=768, 
+                out_features=1000,
+                bias=True
+            )
+            
+            # 3. Load fine-tuned weights
+            # Try to construct path. JSON has "vit_base_patch14_reg4_dinov2_head_finetuned_best.pth"
+            # Actual file might be without extension in subfolder
+            
+            # Check models_details for hint
+            rel_path = "vit_base_patch14_reg4_dinov2_head_finetuned_best.pth"
+            if model_id in all_model_details_dict:
+                 rel_path = all_model_details_dict[model_id].get("finetuned_head_path", rel_path)
+            
+            # We know it's in head_finetuned directory based on ls
+            # It might be strict filename or just name
+            candidate_names = [
+                rel_path,
+                "vit_base_patch14_reg4_dinov2_head_finetuned_best",
+                "vit_base_patch14_reg4_dinov2_head_finetuned_best.pth"
+            ]
+            
+            ckpt_path = None
+            for name in candidate_names:
+                p = os.path.join(checkpoint_dir, "head_finetuned", os.path.basename(name))
+                if os.path.exists(p):
+                    ckpt_path = p
+                    break
+                # Try without extension if name has one
+                if name.endswith(".pth"):
+                    p_no_ext = os.path.join(checkpoint_dir, "head_finetuned", os.path.basename(name)[:-4])
+                    if os.path.exists(p_no_ext):
+                        ckpt_path = p_no_ext
+                        break
+            
+            if ckpt_path is None:
+                 raise FileNotFoundError(f"Could not find checkpoint for {model_id} in {checkpoint_dir}/head_finetuned")
 
-        model_details_dict = all_model_details_dict[SELECTED_MODEL_ID]
-        model = vit_base_patch14_reg4_dinov2(
-            pretrained = False, 
-            checkpoint_dir = model_details_dict["finetuned_head_path"]
-        ).to("cpu")
-        model.eval()
-        inference_model = vit_orig(pretrained=True, checkpoint_dir=checkpoint_dir).to("cpu")
-        inference_model.eval()
+            logger.info(f"Loading weights from {ckpt_path}")
+            state_dict = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(state_dict)
+            model.to(target_device)
+            model.eval()
+
+            # For inference_model, we recreate the architecture
+            # NOTE: We can just use the SAME model object if strict separation isn't needed,
+            # but to be safe and consistent with previous code structure:
+            
+            # Using the same LRP class for inference is fine, but Flask backend used 'vit_orig' for inference previously.
+            # 'vit_orig' is likely standard timm or non-LRP. 
+            # For DINOv2 we don't have a specific 'vit_orig' import for it, so we can use the LRP class 
+            # or we'd need to import standard timm. 
+            # Using LRP class for inference is 100% fine as long as we don't call relprop.
+            inference_model = vit_base_patch14_reg4_dinov2(
+                pretrained=False, 
+                img_size=518
+            )
+            inference_model.head = torch.nn.Linear(768, 1000, bias=True)
+            inference_model.load_state_dict(state_dict)
+            inference_model.to(target_device)
+            inference_model.eval()
+
+        else:
+            raise ValueError(f"Model ID {model_id} not implemented in backend loading logic.")
+
+        # Initialize shared components
         baselines = Baselines(inference_model)
-        logger.info("ViT_LRP models loaded successfully.")
         attribution_generator = LRP(model)
-        _current_device = "cpu"
-        logger.info("Model and LRP initialized successfully (on CPU, will move to requested device on first use).")
         
+        SELECTED_MODEL_ID = model_id
+        logger.info(f"Successfully loaded {model_id}")
         
-        except Exception as e:
-    logger.error("Failed to initialize model / LRP:")
-    logger.error(e)
-    traceback.print_exc()
-    raise e  # fail fast so you notice
+    except Exception as e:
+        logger.error(f"Failed to load model {model_id}: {e}")
+        # traceback.print_exc()
+        raise e
 
 
 
@@ -199,39 +280,19 @@ def compute_attribution_map(original_image, class_index=None, method="transforme
     input_tensor.requires_grad_(True)
 
     # Run LRP
+    # Run LRP
     try:
-        if SELECTED_MODEL_ID == "vit_base_patch16_224.augreg2_in21k_ft_in1k":
-            from pprint import pprint
-            pprint(all_model_details_dict[SELECTED_MODEL_ID])
-            
-            if method == "attn_gradcam":
-                transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
-            else:
-                transformer_attribution = attribution_generator.generate_LRP(
-                    input_tensor,
-                    method=method,
-                    index=class_index
-                )  # tensor on device
-        
-        elif SELECTED_MODEL_ID == "vit_base_patch14_reg4_dinov2":
+        if model is None:
+             raise RuntimeError("No model selected or loaded. Please select a model first.")
 
-            model_lrp = vit_base_patch14_reg4_dinov2(pretrained=False, img_size=518).to(device)
-
-            model_details = all_model_details_dict[SELECTED_MODEL_ID]
-            
-            if method == "attn_gradcam":
-                transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
-            else:
-                transformer_attribution = attribution_generator.generate_LRP(
-                    input_tensor,
-                    method=method,
-                    index=class_index
-                )  # tensor on device
-
-
-        # TODO: Add all other models LRP here
+        if method == "attn_gradcam":
+            transformer_attribution = baselines.generate_cam_attn(input_tensor, index=class_index)
         else:
-            raise ValueError(f"Invalid model ID: {SELECTED_MODEL_ID}")
+            transformer_attribution = attribution_generator.generate_LRP(
+                input_tensor,
+                method=method,
+                index=class_index
+            )  # tensor on device
         logger.debug(f"transformer_attribution shape after generate_LRP: {transformer_attribution.shape}, dims: {transformer_attribution.dim()}")
         
         # Handle different return shapes from generate_LRP
@@ -680,9 +741,12 @@ def set_selected_model():
         
         model_id = data["model_id"]
         
-        
+        # Load the selected model
+        if hasattr(torch.cuda, 'empty_cache'):
+            torch.cuda.empty_cache()
 
-        SELECTED_MODEL_ID = model_id
+        load_model_by_id(model_id)
+        
         logger.debug(f"Setting global selected model: {SELECTED_MODEL_ID}")
         
         return jsonify({"selected_model": SELECTED_MODEL_ID}), 200
@@ -714,6 +778,15 @@ def get_models():
     except Exception as e:
         logger.error(f"Error reading models_details.json: {e}")
         return jsonify({"error": str(e)}), 500
+
+# --------------------------
+# Initial Model Load
+# --------------------------
+try:
+    if SELECTED_MODEL_ID:
+        load_model_by_id(SELECTED_MODEL_ID)
+except Exception as e:
+    logger.error(f"Failed to load default model on startup: {e}")
 
 if __name__ == "__main__":
     # Parse command-line arguments

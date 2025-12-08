@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { Stage, Layer, Image as KonvaImage, Line } from "react-konva";
+import { Stage, Layer, Image as KonvaImage, Line, Circle } from "react-konva";
 import { Upload, Zap, RefreshCw, Sparkles, Activity, ZoomIn, ZoomOut, Undo, Trash2, Sliders, Eraser } from "lucide-react";
 
 export default function Page() {
@@ -44,6 +44,8 @@ export default function Page() {
   const [maskLines, setMaskLines] = useState([]);
   const [history, setHistory] = useState([]); // For Undo
   const [isDrawingMask, setIsDrawingMask] = useState(false);
+  const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
+  const [showCursor, setShowCursor] = useState(false);
 
   /* Mask Tools State */
   const [activeTool, setActiveTool] = useState("brush"); // 'brush' or 'eraser'
@@ -252,9 +254,11 @@ export default function Page() {
   };
 
   const handleMaskMouseMove = (e) => {
-    if (!isDrawingMask) return;
     const stage = e.target.getStage();
     const point = getPointerPosInImage(stage);
+    setCursorPos(point);
+
+    if (!isDrawingMask) return;
 
     setMaskLines((lines) => {
       const lastLine = lines[lines.length - 1];
@@ -267,6 +271,9 @@ export default function Page() {
   const handleMaskMouseUp = () => {
     setIsDrawingMask(false);
   };
+
+  const handleMouseEnter = () => setShowCursor(true);
+  const handleMouseLeave = () => setShowCursor(false);
 
   const handleUndo = () => {
     if (history.length === 0) return;
@@ -841,7 +848,7 @@ export default function Page() {
               <div style={{ borderColor: '#30363d', backgroundColor: '#0d1117' }} className="rounded-lg overflow-hidden border-2 border-dashed relative group">
                 {konvaImage && imgSize.width > 0 && imgSize.height > 0 ? (
                   <Stage
-                    width={imgSize.width}
+                    width={stageWidth}
                     height={imgSize.height}
                     scaleX={scale}
                     scaleY={scale}
@@ -849,21 +856,17 @@ export default function Page() {
                     y={stagePos.y}
                     draggable={scale > 1}
                     onDragEnd={(e) => {
-                      setStagePos(e.target.position());
+                      setStagePos({ x: e.target.x(), y: e.target.y() });
                     }}
+                    onMouseEnter={handleMouseEnter}
+                    onMouseLeave={handleMouseLeave}
                     onMouseDown={handleMaskMouseDown}
-                    onMouseMove={handleMaskMouseMove}
-                    onMouseUp={handleMaskMouseUp}
-                    style={{ cursor: scale > 1 ? "grab" : "crosshair" }}
+                    onMousemove={handleMaskMouseMove}
+                    onMouseup={handleMaskMouseUp}
+                    style={{ cursor: scale > 1 ? 'grab' : 'crosshair' }}
                   >
                     <Layer>
-                      <KonvaImage
-                        image={konvaImage}
-                        x={0}
-                        y={0}
-                        width={imgSize.width}
-                        height={imgSize.height}
-                      />
+                      <KonvaImage image={konvaImage} width={imgSize.width} height={imgSize.height} />
                     </Layer>
                     <Layer>
                       {maskLines.map((line, idx) => (
@@ -881,9 +884,19 @@ export default function Page() {
                           }
                         />
                       ))}
+                      {showCursor && konvaImage && (
+                        <Circle
+                          x={cursorPos.x}
+                          y={cursorPos.y}
+                          radius={brushSize / 2}
+                          stroke="black"
+                          strokeWidth={1.5 / scale}
+                          fill="transparent"
+                          listening={false}
+                        />
+                      )}
                     </Layer>
-                  </Stage>
-                ) : (
+                  </Stage>) : (
                   <div className="p-16 text-center text-gray-500">
                     <Upload className="w-12 h-12 mx-auto mb-3 opacity-50" />
                     <p>Upload an image to start drawing</p>

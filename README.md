@@ -18,7 +18,7 @@ npm run dev
 - View clicked image full screen to view finer details
 
 UI Fixes 
-- add inverse mask 
-- change the brush size 
-- add reset mask 
-- need to pasrse the pertubed image and get the explainability map
++ add inverse mask 
++ change the brush size 
++ add reset mask 
++ need to pasrse the pertubed image and get the explainability map
